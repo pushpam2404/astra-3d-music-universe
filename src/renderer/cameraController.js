@@ -18,9 +18,10 @@ export class CameraFlightController {
   }
 
   flyToNode(node) {
+    // Suns frame their whole cluster disc; planets frame their moon system.
     const standoffDist =
-      node.type === 'genre' ? 85.0 :
-      node.type === 'artist' ? 56.0 : 36.0;
+      node.type === 'genre' ? Math.max(70, (node.clusterRadius || 60) * 1.9) :
+      node.type === 'artist' ? 26 + node.baseRadius * 4 : 14;
 
     const viewDir = new THREE.Vector3()
       .subVectors(this.camera.position, this.controls.target)
@@ -39,9 +40,16 @@ export class CameraFlightController {
     }
   }
 
+  /** Frames the whole galaxy; radius comes from the layout's bounding radius. */
+  setSceneRadius(radius) {
+    this.sceneRadius = radius;
+    this.controls.maxDistance = Math.max(850, radius * 3.2);
+  }
+
   resetOverview() {
+    const R = this.sceneRadius || 200;
     this.targetLookAt.set(0, 0, 0);
-    this.targetCameraPos.set(0, 160, 320);
+    this.targetCameraPos.set(0, R * 0.7, R * 1.15);
     this.active = true;
     if (this.onWarpChange) this.onWarpChange(0.6);
   }

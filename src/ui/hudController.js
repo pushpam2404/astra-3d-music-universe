@@ -116,7 +116,7 @@ export class HudController {
       layoutToggle.addEventListener('click', () => {
         const nextMode = this.state.layoutMode === 'force' ? 'rings' : 'force';
         this.state.layoutMode = nextMode;
-        layoutToggle.textContent = nextMode === 'force' ? '3D FORCE CLUSTERS' : 'ASTRONOMICAL RINGS';
+        layoutToggle.textContent = nextMode === 'force' ? 'GALAXY CLUSTERS' : 'ASTRONOMICAL RINGS';
         layoutToggle.classList.toggle('active', nextMode === 'rings');
         this.cb.onLayoutModeChange(nextMode);
       });
@@ -337,6 +337,34 @@ export class HudController {
         collisionModal.classList.remove('active');
       });
     }
+  }
+
+  /** Lists clusters (suns) largest first; clicking one flies to it. */
+  renderClusterLegend(suns) {
+    const list = document.getElementById('cluster-legend-list');
+    if (!list) return;
+    list.innerHTML = '';
+    suns
+      .slice()
+      .sort((a, b) => (b.neighbors?.size || 0) - (a.neighbors?.size || 0))
+      .forEach(sun => {
+        const li = document.createElement('li');
+        li.className = 'cluster-legend-item';
+        li.tabIndex = 0;
+        li.innerHTML = `
+          <span class="legend-swatch" style="background:${sun.color}; box-shadow: 0 0 10px ${sun.color}"></span>
+          <span class="legend-text">
+            <span class="legend-name"></span>
+            <span class="legend-sub"></span>
+          </span>
+          <span class="legend-count">${sun.neighbors?.size || 0}</span>`;
+        li.querySelector('.legend-name').textContent = sun.name;
+        li.querySelector('.legend-sub').textContent = (sun.subgenres || []).slice(0, 3).join(' · ') || sun.familyLabel || '';
+        const select = () => this.cb.onSelectNode(sun);
+        li.addEventListener('click', select);
+        li.addEventListener('keydown', (e) => { if (e.key === 'Enter') select(); });
+        list.appendChild(li);
+      });
   }
 
   setAuthStatus(status) {

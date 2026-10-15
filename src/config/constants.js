@@ -3,38 +3,29 @@
  * ASTRA // 3D Music Universe - Physical, Visual & Telemetry Constants
  */
 
+// Visual radius range per tier (log-scaled by play count in graphNormalizer).
 export const TIER_BOUNDS = {
-  genre: { minR: 7.5, maxR: 14.0, haloMult: 4.2 },
-  artist: { minR: 3.5, maxR: 8.2, haloMult: 3.2 },
-  track: { minR: 1.5, maxR: 3.6, haloMult: 2.6 }
+  genre: { minR: 6.0, maxR: 11.0, haloMult: 4.0 },
+  artist: { minR: 2.2, maxR: 5.6, haloMult: 2.6 },
+  track: { minR: 0.55, maxR: 1.25, haloMult: 2.2 }
 };
 
-export const PHYSICS_CONFIG = {
-  // Spring Attraction (Hooke's Law)
-  springK: 0.0085,
-  restLengthSingleGenre: 34.0,
-  restLengthBridgeGenre: 38.0,
-
-  // Pairwise Repulsion (Coulomb Electrostatic)
-  repulsionK: 1250.0,
-  repulsionEpsilon: 16.0,
-
-  // Swirl & Orbital Dynamics
-  genreOrbitRadius: 115.0,
-  genreOrbitSpeed: 0.00035,
-  swirlK: 0.018,
-  satelliteOrbitSpeedMin: 0.006,
-  satelliteOrbitSpeedMax: 0.016,
-
-  // Damping / Friction
-  damping: 0.84,
-
-  // Camera flight
-  standoffDistances: {
-    genre: 85.0,
-    artist: 56.0,
-    track: 36.0
-  }
+// Galaxy layout geometry (src/physics/galaxyLayout.js).
+export const LAYOUT_CONFIG = {
+  sunCoreFactor: 1.9,        // empty space around a sun, in sun radii
+  discInnerGap: 6.0,
+  discSpacing: 12.5,         // phyllotaxis spacing between artist planets
+  discMargin: 10.0,          // room for moons at the disc edge
+  discThickness: 9.0,
+  discTiltRange: 0.7,        // radians
+  discSpinSpeed: 0.035,      // rad/s, rigid rotation so planets never collide
+  clusterGap: 26.0,          // empty space between neighbouring cluster discs
+  sunHeightJitter: 7.0,
+  bridgeSpacing: 9.0,
+  moonInnerGap: 2.2,
+  moonSpacing: 1.35,
+  moonSpeed: 0.55,           // rad/s for the innermost moon
+  moonInclinationRange: 1.4
 };
 
 export const GENRE_PALETTES = {

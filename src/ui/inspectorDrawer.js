@@ -67,30 +67,47 @@ export class InspectorDrawer {
 
     // Connected entities
     const connectionsContainer = this.drawerEl.querySelector('#inspector-connections');
+    const connectionsTitle = this.drawerEl.querySelector('#inspector-connections-title');
+    const subgenresContainer = this.drawerEl.querySelector('#inspector-subgenres');
+    const subgenresTitle = this.drawerEl.querySelector('#inspector-subgenres-title');
     connectionsContainer.innerHTML = '';
+    subgenresContainer.innerHTML = '';
 
-    const addPill = (label, type, targetNode) => {
+    const addPill = (container, label, targetNode, color) => {
       const pill = document.createElement('span');
-      pill.className = 'connection-pill';
+      pill.className = targetNode ? 'connection-pill' : 'connection-pill pill-tag';
       pill.textContent = label;
+      if (color) pill.style.borderColor = color;
       if (targetNode) {
         pill.style.cursor = 'pointer';
         pill.addEventListener('click', () => {
           if (this.onNodeSelected) this.onNodeSelected(targetNode);
         });
       }
-      connectionsContainer.appendChild(pill);
+      container.appendChild(pill);
     };
+    const resolve = (id) => (this.resolveNode ? this.resolveNode(id) : null);
+    const neighborsOfType = (type) => [...(node.neighbors || [])].map(resolve).filter(n => n && n.type === type);
 
-    if (node.type === 'artist' && node.connectedGenres?.length) {
-      node.connectedGenres.forEach(g => addPill(g, 'genre'));
-    } else if (node.type === 'track') {
-      if (node.connectedArtists?.length) {
-        node.connectedArtists.forEach(a => addPill(a, 'artist'));
-      }
-    } else if (node.type === 'genre') {
-      addPill('Orbital Anchor Hub', 'genre');
+    if (node.type === 'genre') {
+      connectionsTitle.textContent = 'Artists in this cluster';
+      neighborsOfType('artist')
+        .sort((a, b) => b.plays - a.plays)
+        .forEach(a => addPill(connectionsContainer, a.name, a, a.color));
+    } else if (node.type === 'artist') {
+      connectionsTitle.textContent = node.isBridge ? 'Bridges two clusters' : 'Cluster';
+      neighborsOfType('genre').forEach(g => addPill(connectionsContainer, g.name, g, g.color));
+      neighborsOfType('track')
+        .sort((a, b) => b.plays - a.plays)
+        .forEach(t => addPill(connectionsContainer, `♪ ${t.name}`, t));
+    } else {
+      connectionsTitle.textContent = 'Artists';
+      neighborsOfType('artist').forEach(a => addPill(connectionsContainer, a.name, a, a.color));
     }
+
+    const subgenres = node.subgenres || [];
+    subgenresTitle.style.display = subgenres.length ? '' : 'none';
+    subgenres.forEach(g => addPill(subgenresContainer, g));
 
     // Audio DNA Meters
     const valence = node.valence ?? 0.65;

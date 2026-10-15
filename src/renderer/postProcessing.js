@@ -43,9 +43,9 @@ export function initPostProcessing(renderer, scene, camera) {
   // HDR Cosmic Bloom
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    1.25, // strength
-    0.45, // radius
-    0.18  // threshold
+    0.85, // strength
+    0.5,  // radius
+    0.28  // threshold
   );
   composer.addPass(bloomPass);
 

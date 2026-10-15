@@ -83,7 +83,7 @@
     <div class="panel-header-title">Spatial Physics</div>
 
     <button id="layout-mode-toggle" class="hud-btn" style="width: 100%; justify-content: center;">
-      3D FORCE CLUSTERS
+      GALAXY CLUSTERS
     </button>
 
     <div class="control-row">
@@ -125,6 +125,12 @@
         <span>Frustum HUD Labels</span>
       </label>
     </div>
+  </aside>
+
+  <!-- Right Side Cluster Legend -->
+  <aside id="cluster-legend" aria-label="Clusters">
+    <div class="panel-header-title">Clusters</div>
+    <ol id="cluster-legend-list"></ol>
   </aside>
 
   <!-- Bottom-Left Active Galaxy Title -->
@@ -190,8 +196,10 @@
 
     <!-- Connected Relationships -->
     <div class="connections-section">
-      <h4>Orbital Connections</h4>
+      <h4 id="inspector-connections-title">Orbital Connections</h4>
       <div id="inspector-connections"></div>
+      <h4 id="inspector-subgenres-title">Genres</h4>
+      <div id="inspector-subgenres"></div>
     </div>
 
     <!-- Spotify Audio DNA Meters -->

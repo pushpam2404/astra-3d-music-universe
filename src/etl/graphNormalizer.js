@@ -12,7 +12,7 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
   const rawNodes = [
     ...genres.map(g => ({ ...g, type: 'genre', color: g.color || '#FF007F' })),
     ...artists.map(a => ({ ...a, type: 'artist' })),
-    ...tracks.map(t => ({ ...t, type: 'track', color: t.color || COLOR_SPOTIFY_GREEN }))
+    ...tracks.map(t => ({ ...t, type: 'track' }))
   ];
 
   // 1. Calculate per-tier log10 bounds and total play sums
@@ -54,6 +54,8 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
       node.connectedGenres = parentGenreIds.map(gId => nodeMap.get(gId)?.name).filter(Boolean);
     } else if (node.type === 'track') {
       const parentArtist = nodeMap.get(node.artistId);
+      // Moons take their planet's (cluster) color unless the dataset sets one.
+      node.color = node.color || parentArtist?.color || COLOR_SPOTIFY_GREEN;
       if (parentArtist) {
         node.connectedArtists = [parentArtist.name];
         if (parentArtist.connectedGenres?.length) {

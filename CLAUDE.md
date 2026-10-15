@@ -38,12 +38,13 @@ The backend reads `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` from `.env` lo
 
 ### Per-frame loop (main.js `animate`)
 
-`ForceDirectedPhysicsEngine.step` (Hooke springs, Coulomb repulsion, Keplerian swirl, or a `'rings'` layout mode) → edge line and pulse updates → solar shader time uniforms → camera (`CameraFlightController`, or `CosmicCinemaDirector` while recording) → hover raycast → `LabelProjector` (2D HTML labels projected from 3D) → inspector FFT spectrum → `EffectComposer` render (bloom plus a warp pass driven by camera flight).
+`GalaxyLayoutEngine.step` (positions are a pure function of time; or a `'rings'` layout mode) → edge line and pulse updates → solar shader time uniforms and focus dimming (`CelestialFactory.updateFocus`) → camera (`CameraFlightController`, or `CosmicCinemaDirector` while recording) → hover raycast → `LabelProjector` (2D HTML labels projected from 3D) → inspector FFT spectrum → `EffectComposer` render (bloom plus a warp pass driven by camera flight).
 
 ### Module layout
 
-- `physics/forceSolver3D.js`: all node motion. Tunables live in `config/constants.js` (`PHYSICS_CONFIG`, `TIER_BOUNDS`, `GENRE_PALETTES`).
-- `renderer/`: scene setup, mesh construction (`celestialFactory.js`), GLSL shaders in `renderer/shaders/` (plain JS string exports), post-processing, camera flight and autopilot.
+- `physics/galaxyLayout.js`: deterministic layout, with no force simulation. Suns sit on a ring ordered by cluster affinity, with the ring radius solved so neighbouring cluster discs never overlap. Artists form a rigidly rotating phyllotaxis disc around their primary sun, ranked by plays. Bridge artists (`genres.length === 2`) sit in the gap between both suns, and tracks orbit as moons. The layout writes `clusterRadius`, `labelRank` and `isBridge` onto nodes, and the factory and labels use them. Tunables are in `config/constants.js` (`LAYOUT_CONFIG`, `TIER_BOUNDS`).
+- `config/genreTaxonomy.js`: maps fine genre strings to broad families (with colors) by keyword. It is shared by the server and the browser.
+- `renderer/`: scene setup, mesh construction (`celestialFactory.js`: per-cluster nebula sprites, and focus dimming through each node's `fadeTargets`), GLSL shaders in `renderer/shaders/` (plain JS string exports), post-processing, and camera flight (overview framed by `setSceneRadius`). `labelProjector.js` places labels by priority with greedy overlap rejection.
 - `audio/sonicSynthesizer.js`: a Web Audio synth driven by node audio features (`valence` → modal scale, `energy` → waveform and filter cutoff, `bpm` → arpeggio rate). It uses no audio files.
 - `ui/hudController.js`: binds every DOM control in `index.html` by element id and calls back into main.js. `ui/inspectorDrawer.js` is the node detail panel. `ui/cinemaExporter.js` records the canvas and synth audio to `.webm` along a Catmull-Rom camera path.
 - `etl/timeMachine4D.js`: `TemporalUniverseScrubber` applies a 90-day half-life decay to timestamped events. Without real events it falls back to a synthetic timeline.
@@ -54,8 +55,10 @@ The backend reads `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` from `.env` lo
 - `routes.js` handles `/api/auth/{status,login,callback,logout}` and `/api/universe`.
 - `spotify.js` implements the Authorization Code flow with the client secret. It refreshes access tokens automatically and retries on 429.
 - `sessions.js` keeps sessions stateless: the tokens are AES-256-GCM encrypted into the HttpOnly `astra_session` cookie, with a key derived from `SESSION_SECRET` (falling back to the client secret). Nothing is stored on the server, which is required for serverless. When a token is refreshed, the cookie is rewritten through `createApi`'s `onTokensRefreshed` callback.
-- `universeBuilder.js` turns top artists/tracks into the raw dataset. It works within the 2026 Development Mode API limits: batch `GET /artists?ids=` is removed, so missing artists are fetched individually and cached; followers and popularity are removed; audio features are unavailable, so features are derived deterministically from the id. It guarantees every track's primary artist exists as a node. Artists whose genres aren't in the top 8 go to an `OTHER GENRES` sun, and artists with no genres go to `UNCLASSIFIED`.
-- `universeBuilder.js` imports `src/config/constants.js`, so that file must stay importable in Node (no browser APIs).
+- `universeBuilder.js` turns top artists/tracks into the raw dataset. It works within the 2026 Development Mode API limits: batch `GET /artists?ids=` is removed, so missing artists are fetched individually and cached; artist genres come back empty; followers and popularity are removed; audio features are unavailable, so features are derived deterministically from the id. It guarantees every track's primary artist exists as a node. In the output, the "genres" (suns) are clusters, and each artist's `genres` holds `[clusterId]` or `[clusterId, bridgeClusterId]`.
+- `genreEnrichment.js` (Wikidata) and `musicbrainz.js` look up artist metadata by exact Spotify artist ID, at a fixed few requests per load. Wikidata provides genres, country and occupation; MusicBrainz provides country and tags. Both cache in memory, retry once on rate limiting, and never throw. On failure they return an `error` that becomes a diagnostics warning.
+- `clustering.js` builds an artist similarity graph (TF-IDF cosine over genre and `@country` tags, plus genre-family cosine, plus a collaboration bonus) and runs Louvain (`graphology-communities-louvain`, seeded). It then merges tiny clusters, names each cluster after its dominant genre, family or distinctive country, and marks bridge artists.
+- `server/` imports `src/config/genreTaxonomy.js`, so that file must stay importable in Node (no browser APIs).
 
 ## Notes
 

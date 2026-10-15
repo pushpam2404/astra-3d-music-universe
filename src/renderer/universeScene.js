@@ -5,14 +5,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 export function createUniverseScene(canvasContainer) {
   // 1. Scene
   const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x040409, 0.0012);
+  scene.fog = new THREE.FogExp2(0x040409, 0.0006);
 
   // 2. Camera
   const camera = new THREE.PerspectiveCamera(
     52,
     window.innerWidth / window.innerHeight,
     0.1,
-    3000
+    6000
   );
   camera.position.set(0, 160, 320);
 
@@ -34,7 +34,7 @@ export function createUniverseScene(canvasContainer) {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.06;
-  controls.minDistance = 15;
+  controls.minDistance = 6;
   controls.maxDistance = 850;
   controls.maxPolarAngle = Math.PI / 1.85;
 
@@ -80,7 +80,7 @@ function createStarfield() {
   for (let i = 0; i < starCount; i++) {
     const i3 = i * 3;
     // Distribute in huge sphere shell
-    const radius = 600 + Math.random() * 900;
+    const radius = 1600 + Math.random() * 1600;
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
 
@@ -98,11 +98,12 @@ function createStarfield() {
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
   const material = new THREE.PointsMaterial({
-    size: 2.2,
+    size: 3.2,
     vertexColors: true,
     transparent: true,
     opacity: 0.85,
-    sizeAttenuation: true
+    sizeAttenuation: true,
+    fog: false
   });
 
   return new THREE.Points(geometry, material);

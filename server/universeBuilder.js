@@ -6,20 +6,21 @@
  * Constraints of the Spotify Web API (Development Mode, 2026):
  *  - GET /artists?ids= (batch) was removed, so missing artists are fetched one by one.
  *  - Artist followers/popularity and track popularity were removed.
+ *  - Artist genres come back empty, so genres, country and occupation come from
+ *    Wikidata and MusicBrainz (both matched by exact Spotify artist id).
  *  - Audio features are unavailable to new apps, so features are derived
  *    deterministically from the Spotify id (stable across reloads, not real).
  */
-import { GENRE_PALETTES, COLOR_SPOTIFY_GREEN } from '../src/config/constants.js';
+import { normalizeGenre, OCCUPATION_GENRES } from '../src/config/genreTaxonomy.js';
+import { fetchWikidataArtistMeta } from './genreEnrichment.js';
+import { fetchMusicBrainzArtistMeta } from './musicbrainz.js';
+import { clusterArtists } from './clustering.js';
 
-const MAX_GENRES = 8;
 const MAX_TOP_ARTISTS = 30;
 const MAX_TRACKS = 40;
 const MAX_INDIVIDUAL_ARTIST_FETCHES = 40;
 const ARTIST_FETCH_CONCURRENCY = 4;
 const ARTIST_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-
-const OTHER_GENRE_ID = 'genre_other';
-const UNCLASSIFIED_GENRE_ID = 'genre_unclassified';
 
 // Artist objects are not user-specific, so cache them across sessions.
 const artistCache = new Map();
@@ -43,16 +44,6 @@ function estimatedFeatures(id) {
     bpm: Math.round(90 + hashUnit(id, 'bpm') * 60)
   };
 }
-
-function genreColor(genreName, index) {
-  for (const [key, color] of Object.entries(GENRE_PALETTES)) {
-    if (key !== 'default' && genreName.toLowerCase().includes(key.toLowerCase())) return color;
-  }
-  const palette = Object.values(GENRE_PALETTES);
-  return palette[index % palette.length] || COLOR_SPOTIFY_GREEN;
-}
-
-const genreIdFor = (name) => `genre_${name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
 
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
@@ -133,43 +124,60 @@ export async function buildUniverseDataset(api, timeRange) {
     topArtists.some(t => t.id === a.id) || primaryIds.has(a.id)
   );
 
-  // 3. Genre suns weighted by artist score.
-  const genreScore = new Map();
+  // 3. Genres: Spotify's own when present (empty for Dev Mode apps), otherwise the union of
+  //    Wikidata genres and MusicBrainz tags. Country (MusicBrainz first, it is cleaner) and
+  //    occupation drive clustering for artists whose genre tags are missing or generic.
+  const ids = includedArtists.map(a => a.id);
+  const [wd, mb] = await Promise.all([fetchWikidataArtistMeta(ids), fetchMusicBrainzArtistMeta(ids)]);
+  if (wd.error) diagnostics.warnings.push(`Wikidata lookup failed (${wd.error}).`);
+  if (mb.error) diagnostics.warnings.push(`MusicBrainz lookup failed (${mb.error}).`);
+
+  const genreSource = { spotify: 0, enriched: 0, none: 0 };
+  const artistGenres = new Map();
+  const artistFeatures = new Map();
   includedArtists.forEach(a => {
-    (a.genres || []).forEach(g => genreScore.set(g, (genreScore.get(g) || 0) + (artistScore.get(a.id) || 0)));
+    const w = wd.metaById.get(a.id) || { genres: [], countries: [], occupations: [] };
+    const m = mb.metaById.get(a.id) || { country: null, area: null, tags: [] };
+    let raw = a.genres || [];
+    if (raw.length) genreSource.spotify++;
+    else if ((raw = [...w.genres, ...m.tags]).length) genreSource.enriched++;
+    else genreSource.none++;
+    const genres = [...new Set(raw.map(normalizeGenre))];
+    const implied = w.occupations.map(o => OCCUPATION_GENRES[o.toLowerCase()]).filter(Boolean);
+    const countries = m.country ? [m.country] : (w.countries.length ? w.countries : (m.area ? [m.area] : []));
+    artistGenres.set(a.id, genres);
+    artistFeatures.set(a.id, { genres: [...new Set([...genres, ...implied])], countries });
   });
-  const topGenreNames = [...genreScore.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_GENRES).map(([g]) => g);
-  const topGenreSet = new Set(topGenreNames);
+  diagnostics.genreSource = genreSource;
 
-  const genres = topGenreNames.map((name, idx) => ({
-    id: genreIdFor(name),
-    name: name.toUpperCase(),
-    color: genreColor(name, idx),
-    basePlays: Math.round(genreScore.get(name)),
-    ...estimatedFeatures(name)
-  }));
-
-  // 4. Artist planets; artists outside the top genres go to honest catch-all suns.
-  let needsOther = false;
-  let needsUnclassified = false;
-  const artists = includedArtists.map(a => {
-    const own = a.genres || [];
-    const matched = own.filter(g => topGenreSet.has(g)).slice(0, 2).map(genreIdFor);
-    let genreIds = matched;
-    if (matched.length === 0) {
-      if (own.length > 0) {
-        needsOther = true;
-        genreIds = [OTHER_GENRE_ID];
-      } else {
-        needsUnclassified = true;
-        genreIds = [UNCLASSIFIED_GENRE_ID];
+  // 4. Cluster artists into suns (genre similarity + collaborations).
+  const includedIdSet = new Set(includedArtists.map(a => a.id));
+  const collabs = new Map();
+  topTracks.forEach(t => {
+    const ids = [...new Set(t.artists.map(a => a.id).filter(id => includedIdSet.has(id)))];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const k = ids[i] < ids[j] ? `${ids[i]}|${ids[j]}` : `${ids[j]}|${ids[i]}`;
+        collabs.set(k, (collabs.get(k) || 0) + 1);
       }
     }
+  });
+
+  const { clusters, assignment, affinityMatrix } = clusterArtists(
+    includedArtists.map(a => ({ id: a.id, name: a.name, ...artistFeatures.get(a.id), score: artistScore.get(a.id) || 1 })),
+    collabs
+  );
+  diagnostics.clusters = clusters.map(c => `${c.name} (${c.members.length})`);
+
+  const titleCase = (g) => g.replace(/\b([a-z])/g, (m) => m.toUpperCase());
+  const artists = includedArtists.map(a => {
+    const { clusterId, bridge } = assignment.get(a.id);
     return {
       id: a.id,
       name: a.name,
-      genres: genreIds,
-      spotifyGenres: own,
+      genres: bridge ? [clusterId, bridge.clusterId] : [clusterId],
+      bridgeWeight: bridge ? bridge.weight : 0,
+      subgenres: artistGenres.get(a.id).slice(0, 6).map(titleCase),
       basePlays: Math.max(10, Math.round(artistScore.get(a.id) || 10)),
       ...estimatedFeatures(a.id),
       spotifyUrl: a.external_urls?.spotify,
@@ -178,20 +186,22 @@ export async function buildUniverseDataset(api, timeRange) {
     };
   });
 
-  const scoreOf = (genreId) => artists.filter(a => a.genres.includes(genreId)).reduce((s, a) => s + a.basePlays, 0);
-  if (needsOther) {
-    genres.push({ id: OTHER_GENRE_ID, name: 'OTHER GENRES', color: '#8A8FA8', basePlays: scoreOf(OTHER_GENRE_ID), ...estimatedFeatures('other') });
-  }
-  if (needsUnclassified) {
-    genres.push({ id: UNCLASSIFIED_GENRE_ID, name: 'UNCLASSIFIED', color: '#4A4E63', basePlays: scoreOf(UNCLASSIFIED_GENRE_ID), ...estimatedFeatures('unclassified') });
-  }
+  const genres = clusters.map(c => ({
+    id: c.id,
+    name: c.name.toUpperCase(),
+    color: c.color,
+    family: c.family,
+    familyLabel: c.familyLabel,
+    subgenres: c.subgenres,
+    affinity: affinityMatrix[c.id],
+    basePlays: c.members.reduce((s, id) => s + (artistScore.get(id) || 0), 0),
+    ...estimatedFeatures(c.id)
+  }));
 
-  const unclassifiedCount = artists.filter(a => a.genres[0] === UNCLASSIFIED_GENRE_ID).length;
   diagnostics.artists = artists.length;
   diagnostics.genres = genres.length;
-  diagnostics.artistsWithoutSpotifyGenres = unclassifiedCount;
-  if (unclassifiedCount > artists.length / 2) {
-    diagnostics.warnings.push(`Spotify returned no genres for ${unclassifiedCount} of ${artists.length} artists, so most planets orbit the UNCLASSIFIED sun.`);
+  if (genreSource.none > artists.length / 2 && !wd.error && !mb.error) {
+    diagnostics.warnings.push(`No genre data found for ${genreSource.none} of ${artists.length} artists; they are grouped by collaborations or placed in Uncharted.`);
   }
 
   // 5. Track satellites; every track now has its primary artist in the graph.

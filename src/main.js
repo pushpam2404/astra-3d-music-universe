@@ -8,7 +8,7 @@ import { TemporalUniverseScrubber } from './etl/timeMachine4D.js';
 import { createUniverseScene } from './renderer/universeScene.js';
 import { initPostProcessing } from './renderer/postProcessing.js';
 import { CelestialFactory } from './renderer/celestialFactory.js';
-import { ForceDirectedPhysicsEngine } from './physics/forceSolver3D.js';
+import { GalaxyLayoutEngine } from './physics/galaxyLayout.js';
 import { CameraFlightController } from './renderer/cameraController.js';
 import { LabelProjector } from './renderer/labelProjector.js';
 import { SonicDnaSynthesizer } from './audio/sonicSynthesizer.js';
@@ -54,7 +54,7 @@ async function initApp() {
 
   // 3. Initialize Engines & Controllers
   const factory = new CelestialFactory(scene);
-  const physics = new ForceDirectedPhysicsEngine();
+  const physics = new GalaxyLayoutEngine();
   const cameraController = new CameraFlightController(camera, controls);
   const labelProjector = new LabelProjector(labelsContainer);
   const synth = new SonicDnaSynthesizer();
@@ -114,6 +114,10 @@ async function initApp() {
     const clickedNode = getIntersectedNode();
     if (clickedNode) {
       selectNode(clickedNode);
+    } else if (AppState.selectedNode) {
+      // Clicking empty space releases the focus.
+      AppState.selectedNode = null;
+      inspector.close();
     }
   }
 
@@ -124,6 +128,7 @@ async function initApp() {
   }
 
   inspector.onNodeSelected = (node) => selectNode(node);
+  inspector.resolveNode = (id) => AppState.nodeMap.get(id);
 
   // 5. Load and Rebuild Graph Universe
   function loadDataset(rawDataset, timeMultiplier = 1.0) {
@@ -144,8 +149,9 @@ async function initApp() {
     AppState.edges = graphData.edges;
     AppState.nodeMap = graphData.nodeMap;
 
-    // Initialize 3D physics positions
+    // Lay out the galaxy and frame the camera around it
     physics.initializeNodePositions(AppState.nodes);
+    cameraController.setSceneRadius(physics.boundingRadius);
 
     // Build 3D meshes for each tier
     AppState.nodes.forEach(node => {
@@ -171,6 +177,8 @@ async function initApp() {
     const descEl = document.getElementById('galaxy-desc-text');
     if (titleEl) titleEl.textContent = rawDataset.name || 'ASTRA Galaxy';
     if (descEl) descEl.textContent = rawDataset.description || '';
+
+    hud.renderClusterLegend(AppState.nodes.filter(n => n.type === 'genre'));
 
     // Apply layer visibility
     applyLayerVisibility();
@@ -311,6 +319,7 @@ async function initApp() {
       }
       AppState.activePreset = 'live_spotify';
       loadDataset(dataset);
+      cameraController.resetOverview();
       if (diagnostics.warnings.length) showNotice(diagnostics.warnings.join(' '));
       return true;
     } catch (err) {
@@ -326,6 +335,7 @@ async function initApp() {
   if (authError) window.history.replaceState({}, document.title, window.location.pathname);
 
   loadDataset(GALAXY_PRESETS.cosmic_synth);
+  cameraController.resetOverview();
   const authStatus = await getAuthStatus();
   hud.setAuthStatus(authStatus);
   if (authError) {
@@ -349,8 +359,9 @@ async function initApp() {
     physics.updateEdgeLines(AppState.edges);
     physics.updateSynapticPulses(AppState.pulseParticles, physics.orbitMultiplier);
 
-    // 2. Update GLSL Solar Plasma Noise Shaders
+    // 2. Update GLSL Solar Plasma Noise Shaders and focus dimming
     factory.updateSolarShaders(timeSec);
+    factory.updateFocus(AppState.selectedNode || AppState.hoveredNode, AppState.nodes, AppState.edges);
 
     // 3. Update Camera Flight or Cinema Spline
     if (cinemaDirector.isRecording) {

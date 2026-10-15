@@ -965,3 +965,132 @@ body, html {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 3px;
 }
+
+/* Cluster legend (right side) */
+#cluster-legend {
+  position: absolute;
+  top: 84px;
+  right: 16px;
+  z-index: 9;
+  width: 250px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  background: var(--bg-panel);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 14px 10px 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+#cluster-legend .panel-header-title {
+  padding: 0 4px;
+  margin-bottom: 6px;
+}
+
+#cluster-legend-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cluster-legend-item {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  outline: none;
+}
+
+.cluster-legend-item:hover,
+.cluster-legend-item:focus-visible {
+  background: var(--bg-panel-hover);
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.legend-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.legend-name {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.legend-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.legend-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.label-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+
+.label-artist {
+  font-size: 10.5px;
+  padding: 3px 9px;
+}
+
+.label-track {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  color: var(--text-muted);
+}
+
+.label-bridge {
+  border-style: dashed;
+}
+
+.pill-tag {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+#inspector-subgenres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#inspector-subgenres-title {
+  margin-top: 10px;
+}
+
+@media (max-width: 900px) {
+  #cluster-legend {
+    display: none;
+  }
+}

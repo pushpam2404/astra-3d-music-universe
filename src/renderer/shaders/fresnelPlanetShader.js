@@ -1,20 +1,30 @@
 // src/renderer/shaders/fresnelPlanetShader.js
 import * as THREE from 'three';
 
-export function createFresnelPlanetMaterial(hexColor, valence = 0.65) {
-  const rimColor = new THREE.Color('#00F0FF').lerp(new THREE.Color('#FF007F'), valence);
+/**
+ * Solid planet with soft terminator lighting, procedural latitude bands and a thin
+ * atmospheric rim. uOpacity drives focus dimming.
+ */
+export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0) {
+  const base = new THREE.Color(hexColor);
+  const rimColor = base.clone().lerp(new THREE.Color('#FFFFFF'), 0.45);
 
   return new THREE.ShaderMaterial({
+    transparent: true,
     uniforms: {
-      uBaseColor: { value: new THREE.Color(hexColor) },
+      uBaseColor: { value: base },
       uRimColor: { value: rimColor },
-      uRimPower: { value: 2.6 }
+      uBandShift: { value: seed * 6.2831 },
+      uBandStrength: { value: 0.12 + valence * 0.12 },
+      uOpacity: { value: 1.0 }
     },
     vertexShader: /* glsl */ `
       varying vec3 vNormal;
       varying vec3 vViewPosition;
+      varying vec3 vLocal;
 
       void main() {
+        vLocal = normalize(position);
         vNormal = normalize(normalMatrix * normal);
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
         vViewPosition = -mvPosition.xyz;
@@ -24,24 +34,26 @@ export function createFresnelPlanetMaterial(hexColor, valence = 0.65) {
     fragmentShader: /* glsl */ `
       uniform vec3 uBaseColor;
       uniform vec3 uRimColor;
-      uniform float uRimPower;
+      uniform float uBandShift;
+      uniform float uBandStrength;
+      uniform float uOpacity;
       varying vec3 vNormal;
       varying vec3 vViewPosition;
+      varying vec3 vLocal;
 
       void main() {
         vec3 normal = normalize(vNormal);
         vec3 viewDir = normalize(vViewPosition);
-        float rim = 1.0 - max(0.0, dot(normal, viewDir));
-        float fresnel = pow(rim, uRimPower);
+        float rim = pow(1.0 - max(0.0, dot(normal, viewDir)), 3.0);
 
-        // Directional key light simulation
-        vec3 lightDir = normalize(vec3(0.5, 0.8, 0.6));
-        float diff = max(0.2, dot(normal, lightDir));
+        vec3 lightDir = normalize(vec3(0.45, 0.75, 0.55));
+        float diff = smoothstep(-0.25, 1.0, dot(normal, lightDir));
 
-        vec3 bodyColor = uBaseColor * diff;
-        vec3 atmosphere = uRimColor * fresnel * 1.5;
+        float bands = sin(vLocal.y * 9.0 + uBandShift + sin(vLocal.x * 4.0 + uBandShift) * 0.6);
+        vec3 surface = uBaseColor * (1.0 + bands * uBandStrength);
 
-        gl_FragColor = vec4(bodyColor + atmosphere, 1.0);
+        vec3 color = surface * (0.22 + 0.78 * diff) + uRimColor * rim * 0.55;
+        gl_FragColor = vec4(color, uOpacity);
       }
     `
   });
