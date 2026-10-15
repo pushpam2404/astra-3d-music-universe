@@ -302,18 +302,22 @@ async function initApp() {
     }
   });
 
-  function showNotice(message) {
+  function showNotice(message, isWarning = true) {
     const descEl = document.getElementById('galaxy-desc-text');
-    if (descEl) descEl.textContent = `⚠ ${message}`;
+    if (descEl) descEl.textContent = isWarning ? `⚠ ${message}` : message;
   }
 
   // Loads the user's live universe from the backend. Returns true on success;
   // on failure, keeps whatever is currently rendered and shows the reason.
   async function loadLiveSpotify(range) {
+    const titleEl = document.getElementById('galaxy-title-text');
+    if (titleEl) titleEl.textContent = 'Charting your universe…';
+    showNotice('Reading your Spotify taste and mapping artists into clusters.', false);
     try {
       const { dataset, diagnostics } = await fetchUniverse(range);
       console.info('[ASTRA] Spotify universe diagnostics:', diagnostics);
       if (!dataset) {
+        if (titleEl) titleEl.textContent = 'Nothing to chart yet';
         showNotice(diagnostics.warnings.join(' '));
         return false;
       }
@@ -325,6 +329,7 @@ async function initApp() {
     } catch (err) {
       console.error('Failed to load Spotify universe:', err);
       if (err.status === 401) hud.setSpotifyConnected(false);
+      if (titleEl) titleEl.textContent = 'Spotify universe unavailable';
       showNotice(err.message);
       return false;
     }

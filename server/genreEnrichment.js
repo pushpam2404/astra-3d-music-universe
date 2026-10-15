@@ -53,21 +53,29 @@ async function sparql(query, signal, attempt = 0) {
   return (await res.json()).results.bindings;
 }
 
+/** Returns { out, failed: string[] }; a failing property doesn't discard the others. */
 async function queryWikidata(spotifyIds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const out = new Map();
+  const failed = [];
   try {
-    const out = new Map();
     // Sequential: Wikidata throttles concurrent queries from one IP.
     for (const [field, path] of Object.entries(PROPERTIES)) {
-      const rows = await sparql(buildQuery(spotifyIds, path), controller.signal);
+      let rows;
+      try {
+        rows = await sparql(buildQuery(spotifyIds, path), controller.signal);
+      } catch (err) {
+        failed.push(`${field}: ${err.name === 'AbortError' ? 'timed out' : err.message}`);
+        continue;
+      }
       rows.forEach(row => {
         const sid = row.sid.value;
         if (!out.has(sid)) out.set(sid, { genres: [], countries: [], occupations: [] });
         out.get(sid)[field] = row.values.value.split('|').filter(Boolean);
       });
     }
-    return out;
+    return { out, failed };
   } finally {
     clearTimeout(timer);
   }
@@ -92,15 +100,12 @@ export async function fetchWikidataArtistMeta(spotifyIds) {
 
   if (missing.length === 0) return { metaById };
 
-  try {
-    const found = await queryWikidata(missing);
-    missing.forEach(id => {
-      const meta = found.get(id) || EMPTY_META;
-      cache.set(id, { meta, fetchedAt: now });
-      metaById.set(id, meta);
-    });
-    return { metaById };
-  } catch (err) {
-    return { metaById, error: err.name === 'AbortError' ? 'Wikidata timed out' : err.message };
-  }
+  const { out: found, failed } = await queryWikidata(missing);
+  missing.forEach(id => {
+    const meta = found.get(id) || EMPTY_META;
+    // Only complete answers are cached, so partial ones are retried on the next load.
+    if (failed.length === 0) cache.set(id, { meta, fetchedAt: now });
+    metaById.set(id, meta);
+  });
+  return failed.length ? { metaById, error: failed.join(', ') } : { metaById };
 }
