@@ -62,6 +62,16 @@ function estimatedFeatures(id) {
   };
 }
 
+/** "505 - Remastered 2011", "505 (Live)" and "505" are the same song. */
+function cleanTitle(name) {
+  return name
+    .toLowerCase()
+    .replace(/\s*[([].*?[)\]]/g, '')
+    .replace(/\s+-\s+.*$/, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
 async function mapWithConcurrency(items, limit, fn) {
   const results = new Array(items.length);
   let next = 0;
@@ -116,29 +126,47 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
     likedSongs: saved.length
   };
 
-  // 2. Score tracks and artists across all sources.
-  const tracksById = new Map();
+  // 2. Score tracks and artists across all sources, remembering where each came from.
+  //    Spotify lists one song under several ids (single, album, deluxe), so songs are
+  //    merged by primary artist + cleaned title and keep every source that mentions them.
+  const tracksById = new Map(); // canonical id → track object
   const trackScore = new Map();
-  const addTrack = (t, score) => {
+  const trackSources = new Map(); // canonical id → { ranks, liked, recentPlays }
+  const canonicalId = new Map(); // "artistId|title" → canonical id
+  const addTrack = (t, score, source) => {
     if (!t || !t.id || t.is_local || !t.artists?.length) return;
-    tracksById.set(t.id, t);
-    trackScore.set(t.id, (trackScore.get(t.id) || 0) + score);
+    const key = `${t.artists[0].id}|${cleanTitle(t.name)}`;
+    let id = canonicalId.get(key);
+    if (!id) {
+      id = t.id;
+      canonicalId.set(key, id);
+      tracksById.set(id, t);
+      trackSources.set(id, { ranks: {}, liked: false, recentPlays: 0 });
+    }
+    trackScore.set(id, (trackScore.get(id) || 0) + score);
+    const src = trackSources.get(id);
+    if (source.range) src.ranks[source.range] = Math.min(src.ranks[source.range] || Infinity, source.rank);
+    if (source.liked) src.liked = true;
+    if (source.recent) src.recentPlays++;
   };
   topTracksByRange.forEach((list, ri) => {
     const w = RANGE_WEIGHTS[ranges[ri]];
-    list.forEach((t, rank) => addTrack(t, w * 1400 * Math.pow(0.97, rank)));
+    list.forEach((t, rank) => addTrack(t, w * 1400 * Math.pow(0.97, rank), { range: ranges[ri], rank: rank + 1 }));
   });
-  recent.forEach(item => addTrack(item.track, RECENT_PLAY_SCORE));
-  saved.forEach(item => addTrack(item.track, SAVED_TRACK_SCORE));
+  recent.forEach(item => addTrack(item.track, RECENT_PLAY_SCORE, { recent: true }));
+  saved.forEach(item => addTrack(item.track, SAVED_TRACK_SCORE, { liked: true }));
 
   const artistsById = new Map();
   const artistScore = new Map();
+  const artistRanks = new Map(); // id → { short_term: rank, ... } for top artists
   const addArtistScore = (id, s) => artistScore.set(id, (artistScore.get(id) || 0) + s);
   topArtistsByRange.forEach((list, ri) => {
     const w = RANGE_WEIGHTS[ranges[ri]];
     list.forEach((a, rank) => {
       artistsById.set(a.id, a); // full objects (images, urls)
       addArtistScore(a.id, w * 3000 * Math.pow(0.96, rank));
+      if (!artistRanks.has(a.id)) artistRanks.set(a.id, {});
+      artistRanks.get(a.id)[ranges[ri]] = rank + 1;
     });
   });
   tracksById.forEach((t, id) => {
@@ -272,9 +300,9 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
       subgenres: artistGenres.get(a.id).slice(0, 6).map(titleCase),
       basePlays: Math.max(10, Math.round(artistScore.get(a.id) || 10)),
       ...estimatedFeatures(a.id),
-      spotifyUrl: a.external_urls?.spotify,
-      imageUrl: a.images?.[0]?.url,
-      followers: 'N/A'
+      ranks: artistRanks.get(a.id) || {},
+      spotifyUrl: a.external_urls?.spotify || `https://open.spotify.com/artist/${a.id}`,
+      imageUrl: a.images?.[0]?.url
     };
   });
 
@@ -310,7 +338,8 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
         featArtistId: feat ? feat.id : null,
         basePlays: Math.max(1, Math.round(trackScore.get(t.id))),
         ...estimatedFeatures(t.id),
-        durationMin: Number((t.duration_ms / 60000).toFixed(1)),
+        ...trackSources.get(t.id),
+        durationMs: t.duration_ms,
         spotifyUrl: t.external_urls?.spotify,
         imageUrl: t.album?.images?.[0]?.url,
         previewUrl: t.preview_url

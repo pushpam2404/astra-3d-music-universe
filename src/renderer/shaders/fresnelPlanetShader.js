@@ -3,14 +3,14 @@ import * as THREE from 'three';
 
 /**
  * Solid planet with soft terminator lighting, procedural latitude bands and a thin
- * atmospheric rim. uOpacity drives focus dimming.
+ * atmospheric rim. uOpacity drives focus dimming by darkening (planets stay opaque;
+ * translucent planets read as soap bubbles).
  */
 export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0) {
   const base = new THREE.Color(hexColor);
   const rimColor = base.clone().lerp(new THREE.Color('#FFFFFF'), 0.45);
 
   return new THREE.ShaderMaterial({
-    transparent: true,
     uniforms: {
       uBaseColor: { value: base },
       uRimColor: { value: rimColor },
@@ -52,8 +52,9 @@ export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0) 
         float bands = sin(vLocal.y * 9.0 + uBandShift + sin(vLocal.x * 4.0 + uBandShift) * 0.6);
         vec3 surface = uBaseColor * (1.0 + bands * uBandStrength);
 
-        vec3 color = surface * (0.22 + 0.78 * diff) + uRimColor * rim * 0.55;
-        gl_FragColor = vec4(color, uOpacity);
+        float lit = max(uOpacity, 0.16);
+        vec3 color = surface * (0.22 + 0.78 * diff) * lit + uRimColor * rim * 0.55 * lit * lit;
+        gl_FragColor = vec4(color, 1.0);
       }
     `
   });

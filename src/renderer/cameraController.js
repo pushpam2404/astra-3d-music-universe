@@ -1,6 +1,7 @@
 // src/renderer/cameraController.js
 import * as THREE from 'three';
 
+/** Smooth camera flights: to a node, or back to a view of the whole galaxy. */
 export class CameraFlightController {
   constructor(camera, orbitControls) {
     this.camera = camera;
@@ -8,36 +9,24 @@ export class CameraFlightController {
     this.active = false;
     this.targetCameraPos = new THREE.Vector3();
     this.targetLookAt = new THREE.Vector3();
+    this.sceneRadius = 200;
 
-    // Auto-pilot tour state
-    this.autoPilotActive = false;
-    this.autoPilotNodes = [];
-    this.autoPilotIndex = 0;
-    this.autoPilotTimer = 0;
-    this.onWarpChange = null;
+    // Grabbing the view cancels an in-progress flight instead of fighting it.
+    this.controls.addEventListener('start', () => { this.active = false; });
   }
 
   flyToNode(node) {
     // Suns frame their whole cluster disc; planets frame their moon system.
     const standoffDist =
       node.type === 'genre' ? Math.max(70, (node.clusterRadius || 60) * 1.9) :
-      node.type === 'artist' ? 26 + node.baseRadius * 4 : 14;
+      node.type === 'artist' ? 26 + (node.systemRadius || node.baseRadius * 4) * 2.2 : 14;
 
-    const viewDir = new THREE.Vector3()
-      .subVectors(this.camera.position, this.controls.target)
-      .normalize();
-
-    if (viewDir.lengthSq() < 0.001) {
-      viewDir.set(0, 0.4, 1).normalize();
-    }
+    const viewDir = new THREE.Vector3().subVectors(this.camera.position, this.controls.target).normalize();
+    if (viewDir.lengthSq() < 0.001) viewDir.set(0, 0.4, 1).normalize();
 
     this.targetLookAt.copy(node.position);
     this.targetCameraPos.copy(node.position).addScaledVector(viewDir, standoffDist);
     this.active = true;
-
-    if (this.onWarpChange) {
-      this.onWarpChange(1.0);
-    }
   }
 
   /** Frames the whole galaxy; radius comes from the layout's bounding radius. */
@@ -51,51 +40,22 @@ export class CameraFlightController {
     const R = this.sceneRadius || 200;
     const vFov = THREE.MathUtils.degToRad(this.camera.fov);
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
-    const dist = (R / Math.sin(Math.min(vFov, hFov) / 2)) * 0.82;
+    // Portrait screens get more margin: the galaxy's widest axis is horizontal.
+    const dist = (R / Math.sin(Math.min(vFov, hFov) / 2)) * (this.camera.aspect < 1 ? 1.0 : 0.82);
     this.targetLookAt.set(0, 0, 0);
     this.targetCameraPos.set(0, dist * 0.55, dist * 0.835);
     this.active = true;
-    if (this.onWarpChange) this.onWarpChange(0.6);
   }
 
-  startAutoPilot(nodes) {
-    this.autoPilotActive = true;
-    this.autoPilotNodes = nodes.filter(n => n.type === 'genre' || n.type === 'artist')
-      .sort((a, b) => b.plays - a.plays);
-    this.autoPilotIndex = 0;
-    this.autoPilotTimer = performance.now();
-    if (this.autoPilotNodes.length > 0) {
-      this.flyToNode(this.autoPilotNodes[0]);
-    }
-  }
-
-  stopAutoPilot() {
-    this.autoPilotActive = false;
-  }
-
-  update(selectedNode, now) {
+  update(selectedNode) {
     if (this.active) {
       this.camera.position.lerp(this.targetCameraPos, 0.065);
       this.controls.target.lerp(this.targetLookAt, 0.08);
-
-      if (this.camera.position.distanceTo(this.targetCameraPos) < 1.0) {
-        this.active = false;
-        if (this.onWarpChange) this.onWarpChange(0.0);
-      }
+      if (this.camera.position.distanceTo(this.targetCameraPos) < 0.5) this.active = false;
     } else if (selectedNode) {
-      // Smoothly track selected node as it orbits
+      // Keep the selected body centered as it orbits.
       this.controls.target.lerp(selectedNode.position, 0.08);
     }
-
-    // Auto-pilot tour progression
-    if (this.autoPilotActive && this.autoPilotNodes.length > 0) {
-      if (now - this.autoPilotTimer > 6000) {
-        this.autoPilotTimer = now;
-        this.autoPilotIndex = (this.autoPilotIndex + 1) % Math.min(8, this.autoPilotNodes.length);
-        this.flyToNode(this.autoPilotNodes[this.autoPilotIndex]);
-      }
-    }
-
     this.controls.update();
   }
 }

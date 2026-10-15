@@ -4,34 +4,19 @@ import { GALAXY_PRESETS } from './config/presets.js';
 import { buildUniverseGraph } from './etl/graphNormalizer.js';
 import { getAuthStatus, fetchUniverse } from './api/backendClient.js';
 import { loadArtistMeta, saveArtistMeta } from './api/artistMetaCache.js';
-import { collideGalaxies } from './etl/galaxyCollider.js';
-import { TemporalUniverseScrubber } from './etl/timeMachine4D.js';
 import { createUniverseScene } from './renderer/universeScene.js';
 import { initPostProcessing } from './renderer/postProcessing.js';
 import { CelestialFactory } from './renderer/celestialFactory.js';
 import { GalaxyLayoutEngine } from './physics/galaxyLayout.js';
 import { CameraFlightController } from './renderer/cameraController.js';
 import { LabelProjector } from './renderer/labelProjector.js';
-import { SonicDnaSynthesizer } from './audio/sonicSynthesizer.js';
-import { InspectorDrawer } from './ui/inspectorDrawer.js';
-import { HudController } from './ui/hudController.js';
-import { CosmicCinemaDirector } from './ui/cinemaExporter.js';
+import { Hud } from './ui/hud.js';
+import { DetailPanel } from './ui/detailPanel.js';
 
-// Master Global State Store (Blueprint 01)
 const AppState = {
-  activePreset: 'cosmic_synth',
-  layoutMode: 'force',
-  orbitSpeedMultiplier: 1.0,
+  isDemo: true,
   nodeScaleMultiplier: 1.0,
-  autoPilotActive: false,
-  spotifyConnected: false,
-  layers: {
-    genres: true,
-    artists: true,
-    tracks: true,
-    edges: true,
-    labels: true
-  },
+  layers: { genres: true, artists: true, tracks: true, edges: true, labels: true },
   nodes: [],
   edges: [],
   nodeMap: new Map(),
@@ -40,381 +25,244 @@ const AppState = {
   selectedNode: null
 };
 
-// Application Bootstrapper
+const plural = (n, one, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
 async function initApp() {
-  const canvasContainer = document.getElementById('webgl-canvas-container');
-  const labelsContainer = document.getElementById('hud-labels-container');
-  const inspectorEl = document.getElementById('inspector-drawer');
+  const { scene, camera, renderer, controls } = createUniverseScene(document.getElementById('webgl-canvas-container'));
+  const { composer } = initPostProcessing(renderer, scene, camera);
 
-  // 1. Initialize Scene & Renderer
-  const { scene, camera, renderer, controls } = createUniverseScene(canvasContainer);
+  // Center the galaxy in the area the side panel leaves visible (right column on wide
+  // screens, bottom sheet on phones), not in the whole window.
+  function updateViewOffset() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const narrow = w <= 760;
+    const shiftX = narrow ? 0 : (320 + 16) / 2;
+    const shiftY = narrow ? h * 0.21 : 0;
+    camera.setViewOffset(w, h, shiftX, shiftY, w, h);
+  }
+  updateViewOffset();
+  window.addEventListener('resize', updateViewOffset);
 
-  // 2. Initialize Post-Processing & Warp Shader
-  const { composer, warpPass } = initPostProcessing(renderer, scene, camera);
-
-  // 3. Initialize Engines & Controllers
   const factory = new CelestialFactory(scene);
-  const physics = new GalaxyLayoutEngine();
+  const layout = new GalaxyLayoutEngine();
   const cameraController = new CameraFlightController(camera, controls);
-  const labelProjector = new LabelProjector(labelsContainer);
-  const synth = new SonicDnaSynthesizer();
-  const inspector = new InspectorDrawer(inspectorEl, synth, cameraController);
-  const cinemaDirector = new CosmicCinemaDirector(renderer, camera, controls, synth);
-
-  cameraController.onWarpChange = (intensity) => {
-    warpPass.uniforms.uWarpIntensity.value = intensity;
-  };
-
-  let timeMachine = new TemporalUniverseScrubber();
+  const labelProjector = new LabelProjector(document.getElementById('hud-labels-container'));
   let edgeGroup = null;
+  let suns = [];
+  let authStatus = { loggedIn: false };
 
-  // 4. Raycaster & Pointer Interaction
+  // ---------- Selection ----------
+
+  function selectNode(node) {
+    AppState.selectedNode = node;
+    cameraController.flyToNode(node);
+    detailPanel.render(node);
+    hud.showDetails();
+  }
+
+  function clearSelection() {
+    AppState.selectedNode = null;
+    hud.showClusters();
+  }
+
+  const detailPanel = new DetailPanel(document.getElementById('detail-content'), {
+    resolve: (id) => AppState.nodeMap.get(id),
+    onSelect: selectNode,
+    onFly: (node) => cameraController.flyToNode(node),
+    isDemo: () => AppState.isDemo,
+    likedSongsConnected: () => !authStatus.missingScopes?.includes('user-library-read')
+  });
+
+  const hud = new Hud(AppState, {
+    onSelectNode: selectNode,
+    onBack: () => {
+      clearSelection();
+      cameraController.resetOverview();
+    },
+    onResetCamera: () => {
+      clearSelection();
+      cameraController.resetOverview();
+    },
+    onLayersChange: applyLayerVisibility,
+    onOrbitSpeed: (speed) => { layout.orbitMultiplier = speed; },
+    onNodeScale: (scale) => {
+      AppState.nodeScaleMultiplier = scale;
+      layout.nodeScaleMultiplier = scale;
+      AppState.nodes.forEach(n => n.meshGroup?.scale.setScalar(scale));
+    },
+    onDisconnected: () => loadDemo()
+  });
+
+  // ---------- Pointer: hover and click on the canvas only ----------
+
   const raycaster = new THREE.Raycaster();
-  const mouse = new THREE.Vector2(-999, -999);
-  let isPointerDown = false;
-  let pointerDownPos = { x: 0, y: 0 };
+  const pointer = new THREE.Vector2(-9, -9);
+  let downAt = null;
+  const setPointer = (e) => pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
 
-  window.addEventListener('mousemove', (e) => {
-    mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  renderer.domElement.addEventListener('pointermove', setPointer);
+  renderer.domElement.addEventListener('pointerleave', () => pointer.set(-9, -9));
+  renderer.domElement.addEventListener('pointerdown', (e) => { downAt = { x: e.clientX, y: e.clientY }; });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    // A drag rotates the view; only a tap/click selects.
+    if (!downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
+    setPointer(e);
+    const node = pickNode();
+    if (node) selectNode(node);
+    else if (AppState.selectedNode) clearSelection();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && AppState.selectedNode && document.activeElement?.tagName !== 'INPUT') clearSelection();
   });
 
-  window.addEventListener('pointerdown', (e) => {
-    isPointerDown = true;
-    pointerDownPos = { x: e.clientX, y: e.clientY };
-  });
-
-  window.addEventListener('pointerup', (e) => {
-    if (!isPointerDown) return;
-    isPointerDown = false;
-
-    // Detect click vs drag (tolerance: 5 pixels)
-    const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-    if (dist < 6) {
-      handleRaycastClick(e);
-    }
-  });
-
-  function getIntersectedNode() {
-    raycaster.setFromCamera(mouse, camera);
-    const meshes = AppState.nodes.map(n => n.sphereMesh).filter(Boolean);
+  function pickNode() {
+    raycaster.setFromCamera(pointer, camera);
+    const meshes = [];
+    AppState.nodes.forEach(n => { if (n.sphereMesh && n.meshGroup?.visible) meshes.push(n.sphereMesh); });
     if (factory.trackMesh && AppState.layers.tracks) meshes.push(factory.trackMesh);
     const hit = raycaster.intersectObjects(meshes, false)[0];
     return hit ? factory.nodeFromHit(hit) : null;
   }
 
-  function handleRaycastClick(e) {
-    // Avoid clicking through UI overlays
-    if (e.target.closest('#inspector-drawer') || e.target.closest('#hud-nav-bar') || e.target.closest('.modal-overlay')) {
-      return;
-    }
+  // ---------- Building a universe ----------
 
-    const clickedNode = getIntersectedNode();
-    if (clickedNode) {
-      selectNode(clickedNode);
-    } else if (AppState.selectedNode) {
-      // Clicking empty space releases the focus.
-      AppState.selectedNode = null;
-      inspector.close();
-    }
-  }
-
-  function selectNode(node) {
-    AppState.selectedNode = node;
-    cameraController.flyToNode(node);
-    inspector.open(node);
-  }
-
-  inspector.onNodeSelected = (node) => selectNode(node);
-  inspector.resolveNode = (id) => AppState.nodeMap.get(id);
-
-  // 5. Load and Rebuild Graph Universe
-  function loadDataset(rawDataset, timeMultiplier = 1.0) {
-    // Clear previous celestial meshes from scene
-    AppState.nodes.forEach(n => {
-      if (n.meshGroup) scene.remove(n.meshGroup);
-    });
-    if (edgeGroup) {
-      scene.remove(edgeGroup);
-      edgeGroup = null;
-    }
-    AppState.pulseParticles = [];
+  function loadDataset(rawDataset) {
+    AppState.nodes.forEach(n => { if (n.meshGroup?.isObject3D) scene.remove(n.meshGroup); });
+    if (edgeGroup) scene.remove(edgeGroup);
     factory.solarMaterials = [];
     factory.disposeBatches();
+    AppState.selectedNode = null;
+    AppState.hoveredNode = null;
 
-    // Normalize graph
-    const graphData = buildUniverseGraph(rawDataset, timeMultiplier);
-    AppState.nodes = graphData.nodes;
-    AppState.edges = graphData.edges;
-    AppState.nodeMap = graphData.nodeMap;
+    const graph = buildUniverseGraph(rawDataset);
+    AppState.nodes = graph.nodes;
+    AppState.edges = graph.edges;
+    AppState.nodeMap = graph.nodeMap;
 
-    // Lay out the galaxy and frame the camera around it
-    physics.initializeNodePositions(AppState.nodes);
-    cameraController.setSceneRadius(physics.boundingRadius);
+    layout.initializeNodePositions(AppState.nodes);
+    cameraController.setSceneRadius(layout.boundingRadius);
 
-    // Build 3D meshes: suns and planets individually, all tracks as one instanced batch
     AppState.nodes.forEach(node => {
       if (node.type === 'genre') factory.buildGenreSun(node);
       else if (node.type === 'artist') factory.buildArtistPlanet(node);
     });
     factory.buildTrackSatellites(AppState.nodes.filter(n => n.type === 'track'));
-
-    // Build synaptic edge network
     const edgeData = factory.buildEdgeVisuals(AppState.edges);
     edgeGroup = edgeData.edgeLinesGroup;
     AppState.pulseParticles = edgeData.pulseParticles;
+    if (AppState.nodeScaleMultiplier !== 1) AppState.nodes.forEach(n => n.meshGroup?.scale.setScalar(AppState.nodeScaleMultiplier));
 
-    // Project labels
-    labelProjector.syncLabels(AppState.nodes, (node) => selectNode(node));
-
-    // Update active preset info in HUD
-    const titleEl = document.getElementById('galaxy-title-text');
-    const descEl = document.getElementById('galaxy-desc-text');
-    if (titleEl) titleEl.textContent = rawDataset.name || 'ASTRA Galaxy';
-    if (descEl) descEl.textContent = rawDataset.description || '';
-
-    hud.renderClusterLegend(AppState.nodes.filter(n => n.type === 'genre'));
-
-    // Apply layer visibility
+    suns = AppState.nodes.filter(n => n.type === 'genre');
+    labelProjector.syncLabels(AppState.nodes, selectNode);
+    hud.renderClusters(AppState.nodes.filter(n => n.type === 'genre'));
+    hud.showClusters();
     applyLayerVisibility();
+    cameraController.resetOverview();
   }
 
   function applyLayerVisibility() {
-    AppState.nodes.forEach(n => {
-      if (n.meshGroup) {
-        if (n.type === 'genre') n.meshGroup.visible = AppState.layers.genres;
-        if (n.type === 'artist') n.meshGroup.visible = AppState.layers.artists;
-        if (n.type === 'track') n.meshGroup.visible = AppState.layers.tracks;
-      }
-    });
-    if (edgeGroup) {
-      edgeGroup.visible = AppState.layers.edges;
-    }
+    const show = { genre: AppState.layers.genres, artist: AppState.layers.artists, track: AppState.layers.tracks };
+    AppState.nodes.forEach(n => { if (n.meshGroup) n.meshGroup.visible = show[n.type]; });
+    if (factory.trackMesh) factory.trackMesh.visible = AppState.layers.tracks;
+    if (edgeGroup) edgeGroup.visible = AppState.layers.edges;
   }
 
-  // 6. HUD Controller & Callbacks
-  const hud = new HudController(AppState, {
-    onLoadPreset: (presetId) => {
-      AppState.activePreset = presetId;
-      const dataset = GALAXY_PRESETS[presetId] || GALAXY_PRESETS.cosmic_synth;
-      timeMachine = new TemporalUniverseScrubber();
-      loadDataset(dataset);
-      cameraController.resetOverview();
-    },
-
-    onSelectNode: (node) => selectNode(node),
-
-    onLayerVisibilityChange: (layer, visible) => {
-      applyLayerVisibility();
-    },
-
-    onLayoutModeChange: (mode) => {
-      physics.layoutMode = mode;
-    },
-
-    onOrbitSpeedChange: (speed) => {
-      physics.orbitMultiplier = speed;
-    },
-
-    onNodeScaleChange: (scale) => {
-      physics.nodeScaleMultiplier = scale;
-      AppState.nodes.forEach(n => {
-        if (n.meshGroup) {
-          n.meshGroup.scale.setScalar(scale);
-        }
-      });
-    },
-
-    onResetCamera: () => {
-      AppState.selectedNode = null;
-      inspector.close();
-      cameraController.resetOverview();
-    },
-
-    onAutoPilotToggle: (active) => {
-      if (active) {
-        cameraController.startAutoPilot(AppState.nodes);
-      } else {
-        cameraController.stopAutoPilot();
-      }
-    },
-
-    onStartCinemaRecording: (onProgress, onComplete) => {
-      // Auto-start sonic signature of top genre or artist during recording
-      const topNode = AppState.nodes.find(n => n.type === 'genre') || AppState.nodes[0];
-      if (topNode) synth.playNodeSignature(topNode);
-
-      cinemaDirector.startCinematicRecording(AppState.nodes, 14000, onProgress, () => {
-        synth.stop();
-        if (onComplete) onComplete();
-      });
-    },
-
-    onTimeScrub: (u) => {
-      return timeMachine.evaluateAtProgress(u, AppState.nodes);
-    },
-
-    onCustomHistoryLoaded: (dataset, rawEvents) => {
-      AppState.activePreset = 'custom_upload';
-      timeMachine = new TemporalUniverseScrubber(rawEvents);
-      loadDataset(dataset);
-      cameraController.resetOverview();
-    },
-
-    onTriggerCollision: (idA, idB) => {
-      const presetA = GALAXY_PRESETS[idA] || GALAXY_PRESETS.cosmic_synth;
-      const presetB = GALAXY_PRESETS[idB] || GALAXY_PRESETS.hyper_bass;
-
-      const graphA = buildUniverseGraph(presetA);
-      const graphB = buildUniverseGraph(presetB);
-
-      const collisionResult = collideGalaxies(graphA, graphB);
-
-      // Re-populate and render collision graph
-      AppState.activePreset = 'collision_mode';
-      loadDataset({
-        id: 'collision',
-        name: `${presetA.name.split('&')[0]} ✕ ${presetB.name.split('&')[0]} Collision`,
-        description: 'Binary Star Merger with L1 Lagrange Bridge of shared musical taste.',
-        genres: collisionResult.nodes.filter(n => n.type === 'genre'),
-        artists: collisionResult.nodes.filter(n => n.type === 'artist'),
-        tracks: collisionResult.nodes.filter(n => n.type === 'track')
-      });
-
-      hud.showCollisionBanner(collisionResult.metrics);
-      cameraController.resetOverview();
-    }
-  });
-
-  function showNotice(message, isWarning = true) {
-    const descEl = document.getElementById('galaxy-desc-text');
-    if (descEl) descEl.textContent = isWarning ? `⚠ ${message}` : message;
+  function loadDemo() {
+    AppState.isDemo = true;
+    loadDataset(GALAXY_PRESETS.cosmic_synth);
+    hud.setCaption('A demo universe', 'Connect Spotify to map your own listening.');
+    hud.setNotice(null);
   }
 
-  // Loads the user's live universe from the backend. Returns true on success;
-  // on failure, keeps whatever is currently rendered and shows the reason.
-  async function loadLiveSpotify() {
-    const titleEl = document.getElementById('galaxy-title-text');
-    if (titleEl) titleEl.textContent = 'Charting your universe…';
-    showNotice('Reading your top charts, recent plays and Liked Songs, then mapping every artist into clusters.', false);
+  async function loadLive() {
+    hud.setLoading(true);
     try {
       const { dataset, artistMeta, diagnostics } = await fetchUniverse(loadArtistMeta());
       saveArtistMeta(artistMeta);
-      console.info('[ASTRA] Spotify universe diagnostics:', diagnostics);
+      console.info('[Astra] universe diagnostics:', diagnostics);
       if (!dataset) {
-        if (titleEl) titleEl.textContent = 'Nothing to chart yet';
-        showNotice(diagnostics.warnings.join(' '));
-        return false;
+        loadDemo();
+        hud.setNotice('Spotify has no listening data for this account yet.');
+        return;
       }
-      AppState.activePreset = 'live_spotify';
+      AppState.isDemo = false;
       loadDataset(dataset);
-      cameraController.resetOverview();
-      const notes = [...diagnostics.warnings];
-      if (diagnostics.lastfm?.pending) {
-        notes.push(`Genres for ${diagnostics.lastfm.pending} more artists will be filled in on your next visit.`);
-      }
+      hud.setCaption('Your music universe', `${plural(dataset.artists.length, 'artist')} and ${plural(dataset.tracks.length, 'song')} in ${plural(dataset.genres.length, 'cluster')}`);
+
       if (authStatus.missingScopes?.includes('user-library-read')) {
-        notes.push('Reconnect Spotify (top right) to add your Liked Songs to the universe.');
+        hud.setNotice('Your Liked Songs aren’t included yet.', { label: 'Reconnect Spotify', run: () => document.getElementById('spotify-btn').click() });
+      } else if (diagnostics.lastfm?.pending) {
+        hud.setNotice(`Genres for ${plural(diagnostics.lastfm.pending, 'artist')} are still being looked up; they’ll appear on your next visit.`);
+      } else {
+        hud.setNotice(null);
       }
-      if (notes.length) showNotice(notes.join(' '));
-      return true;
     } catch (err) {
       console.error('Failed to load Spotify universe:', err);
-      if (err.status === 401) hud.setSpotifyConnected(false);
-      if (titleEl) titleEl.textContent = 'Spotify universe unavailable';
-      showNotice(err.message);
-      return false;
+      loadDemo();
+      if (err.status === 401) {
+        authStatus = { ...authStatus, loggedIn: false };
+        hud.setAuthStatus(authStatus);
+      }
+      hud.setNotice(err.message, err.status === 401 ? null : { label: 'Try again', run: loadLive });
+    } finally {
+      hud.setLoading(false);
     }
   }
 
-  // 7. Restore backend Spotify session (OAuth callback redirects back to "/")
+  // ---------- Start ----------
+
   const authError = new URLSearchParams(window.location.search).get('auth_error');
   if (authError) window.history.replaceState({}, document.title, window.location.pathname);
 
-  function loadDemo(notice) {
-    AppState.activePreset = 'cosmic_synth';
-    loadDataset(GALAXY_PRESETS.cosmic_synth);
-    cameraController.resetOverview();
-    const titleEl = document.getElementById('galaxy-title-text');
-    if (titleEl) titleEl.textContent = 'Demo Universe';
-    showNotice(notice, false);
-  }
-
-  const authStatus = await getAuthStatus();
+  authStatus = await getAuthStatus();
   hud.setAuthStatus(authStatus);
-  if (authStatus.loggedIn && !authError) {
-    if (!(await loadLiveSpotify())) {
-      // Keep the error notice; show something behind it.
-      const descEl = document.getElementById('galaxy-desc-text');
-      const reason = descEl?.textContent;
-      loadDemo('');
-      showNotice(reason?.replace(/^⚠ /, '') || 'Could not load your universe.');
-    }
-  } else {
-    loadDemo('A demo universe. Connect Spotify to chart your own music.');
-    if (authError) showNotice(`Spotify login failed: ${authError}`);
-  }
 
-  // 8. Master Animation & Render Loop (60 FPS)
+  // ---------- Frame loop ----------
+
   let lastTime = performance.now();
-  let frameCount = 0;
+  let frame = 0;
 
   function animate(now) {
     requestAnimationFrame(animate);
-
     const delta = Math.min(32, now - lastTime);
     lastTime = now;
-    const timeSec = now * 0.001;
 
-    // 1. Step 3D Physics Engine
-    physics.step(AppState.nodes, delta);
+    layout.step(AppState.nodes, delta);
     factory.updateTrackInstances();
     factory.updateEdgeGeometry(AppState.edges);
-    factory.updatePulses(AppState.pulseParticles, physics.orbitMultiplier);
-
-    // 2. Update GLSL Solar Plasma Noise Shaders and focus dimming
-    factory.updateSolarShaders(timeSec);
+    factory.updatePulses(AppState.pulseParticles, layout.orbitMultiplier);
+    factory.updateSolarShaders(now * 0.001);
+    factory.updateNebulae(camera, suns);
     factory.updateFocus(AppState.selectedNode || AppState.hoveredNode, AppState.nodes, AppState.edges);
 
-    // 3. Update Camera Flight or Cinema Spline
-    if (cinemaDirector.isRecording) {
-      cinemaDirector.updateCinemaCamera(now);
-    } else {
-      cameraController.update(AppState.selectedNode, now);
-    }
+    cameraController.update(AppState.selectedNode);
 
-    // 4. Update Hovered Node Highlight Cursor (every 3rd frame; raycasting thousands of moons isn't free)
-    if (frameCount++ % 3 === 0) {
-      const hovered = getIntersectedNode();
+    // Hover every 3rd frame: raycasting thousands of moons isn't free.
+    if (frame++ % 3 === 0) {
+      const hovered = pickNode();
       if (hovered !== AppState.hoveredNode) {
         AppState.hoveredNode = hovered;
-        document.body.style.cursor = hovered ? 'pointer' : 'default';
+        renderer.domElement.style.cursor = hovered ? 'pointer' : '';
       }
     }
 
-    // 5. Update Frustum Projected 2D HTML Labels
-    labelProjector.update(
-      AppState.nodes,
-      camera,
-      AppState.selectedNode || AppState.hoveredNode,
-      AppState.nodeScaleMultiplier,
-      AppState.layers.labels
-    );
-
-    // 6. Render Inspector Drawer Audio Spectrum
-    inspector.renderSpectrum();
-
-    // 7. Render Scene with HDR Bloom & Chromatic Warp Post-Processing
+    labelProjector.update(AppState.nodes, camera, AppState.selectedNode || AppState.hoveredNode, AppState.nodeScaleMultiplier, AppState.layers.labels);
     composer.render();
   }
-
   requestAnimationFrame(animate);
+
+  if (authStatus.loggedIn && !authError) {
+    await loadLive();
+  } else {
+    loadDemo();
+    if (authError) hud.setNotice(`Spotify login didn’t complete: ${authError}`);
+  }
 
   // Dev-only hook for loading arbitrary datasets from the console.
   if (import.meta.env.DEV) window.__astra = { loadDataset, AppState };
 }
 
-// Boot application when DOM is ready
 window.addEventListener('DOMContentLoaded', () => {
-  initApp().catch(err => console.error('ASTRA Initialization Error:', err));
+  initApp().catch(err => console.error('Astra failed to start:', err));
 });

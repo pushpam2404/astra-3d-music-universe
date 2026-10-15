@@ -65,7 +65,6 @@ export class GalaxyLayoutEngine {
   constructor() {
     this.orbitMultiplier = 1.0;
     this.nodeScaleMultiplier = 1.0;
-    this.layoutMode = 'force'; // 'force' (galaxy) | 'rings'
     this.time = 0;
     this.boundingRadius = 200;
     this._tmp = new THREE.Vector3();
@@ -213,10 +212,6 @@ export class GalaxyLayoutEngine {
 
   step(nodes, delta = 16) {
     this.time += (Math.min(delta, 64) / 1000) * Math.max(0, this.orbitMultiplier);
-    if (this.layoutMode === 'rings') {
-      this.stepConcentricRings(nodes);
-      return;
-    }
     this.applyPositions(nodes);
   }
 
@@ -275,21 +270,5 @@ export class GalaxyLayoutEngine {
     if (artist._sun && artist._sun.id === artist.primarySunId) return artist._sun;
     artist._sun = nodes.find(n => n.id === artist.primarySunId) || null;
     return artist._sun;
-  }
-
-  stepConcentricRings(nodes) {
-    // Ordered shells: suns inner, artists middle, tracks outer.
-    const t = this.time * 0.35;
-    const tiers = { genre: [], artist: [], track: [] };
-    nodes.forEach(n => tiers[n.type]?.push(n));
-    const shells = { genre: [70, 0.4, 0], artist: [150, 0.7, 8], track: [225, 1.1, 12] };
-    Object.entries(tiers).forEach(([type, list]) => {
-      const [radius, speed, wobble] = shells[type];
-      list.forEach((n, idx) => {
-        const angle = (idx / Math.max(1, list.length)) * Math.PI * 2 + t * speed;
-        n.position.set(Math.cos(angle) * radius, Math.sin(angle * 2) * wobble, Math.sin(angle) * radius);
-        if (n.meshGroup) n.meshGroup.position.copy(n.position);
-      });
-    });
   }
 }

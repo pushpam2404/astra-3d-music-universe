@@ -75,18 +75,12 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
 
     const baseRadius = bounds.minR + normScore * (bounds.maxR - bounds.minR);
     const haloRadius = baseRadius * bounds.haloMult;
-    const mass = 1.0 + baseRadius * baseRadius;
-    const gravityShare = ((node.plays / Math.max(1, tierStat.totalPlays)) * 100).toFixed(1);
-    const hoursListened = ((node.plays * 3.65) / 60).toFixed(1);
 
     return {
       ...node,
       normScore: Number(normScore.toFixed(4)),
       baseRadius: Number(baseRadius.toFixed(2)),
-      haloRadius: Number(haloRadius.toFixed(2)),
-      mass: Number(mass.toFixed(2)),
-      gravityShare: `${gravityShare}%`,
-      hoursListened: Number(hoursListened)
+      haloRadius: Number(haloRadius.toFixed(2))
     };
   });
 

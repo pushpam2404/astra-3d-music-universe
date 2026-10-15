@@ -2,342 +2,92 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ASTRA // 3D Interactive Music Universe</title>
-  <meta name="description" content="Transform your Spotify listening history into an interactive 3D celestial system of Genre Suns, Artist Planets, and Track Satellites with real-time Web Audio API synthesis.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Astra · your music, mapped</title>
+  <meta name="description" content="Connect Spotify and see everything you listen to as a galaxy: genres as suns, artists as planets, songs as moons.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./src/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='45' fill='%231DB954'/><path d='M25 40 Q50 30 75 40' stroke='%2304040a' stroke-width='8' fill='none'/><path d='M28 52 Q50 44 72 52' stroke='%2304040a' stroke-width='7' fill='none'/><path d='M32 64 Q50 58 68 64' stroke='%2304040a' stroke-width='6' fill='none'/></svg>">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='16' fill='%23F4E9C8'/><ellipse cx='50' cy='50' rx='42' ry='14' fill='none' stroke='%23F4E9C8' stroke-width='5' transform='rotate(-20 50 50)'/></svg>">
 </head>
 <body>
-
-  <!-- 3D WebGL Canvas Viewport -->
-  <div id="webgl-canvas-container"></div>
-
-  <!-- Dynamic 3D-to-2D Frustum Projected HTML Labels -->
+  <div id="webgl-canvas-container" aria-hidden="true"></div>
   <div id="hud-labels-container"></div>
 
-  <!-- Glassmorphic Top Navigation Bar -->
-  <header id="hud-nav-bar">
-    <div class="brand-section">
-      <div class="brand-orb"></div>
-      <div class="brand-text">
-        <h1>ASTRA</h1>
-        <span>3D MUSIC OBSERVATORY</span>
-      </div>
+  <header id="top-bar">
+    <div class="brand">
+      <span class="brand-name">Astra</span>
+      <span class="brand-tagline">your music, mapped</span>
     </div>
 
-    <div class="center-hud-controls">
-      <!-- Quick Search with Autocomplete Dropdown -->
-      <div class="search-container">
-        <span class="search-icon">&#9906;</span>
-        <input type="text" id="galaxy-search-input" class="search-input" placeholder="Search universe..." autocomplete="off">
-        <div id="search-results-dropdown" class="search-dropdown"></div>
-      </div>
+    <div class="search" role="search">
+      <input type="search" id="search-input" placeholder="Find an artist, song or cluster" autocomplete="off" aria-label="Search your universe">
+      <ul id="search-results" role="listbox" hidden></ul>
     </div>
 
-    <div class="nav-actions">
-      <button id="reset-camera-btn" class="hud-btn" title="Reset Viewport">
-        <span>&#8942;</span> OVERVIEW
-      </button>
-
-      <button id="auto-pilot-btn" class="hud-btn" title="Automated Tour">
-        <span class="btn-text">AUTO-PILOT TOUR</span>
-      </button>
-
-      <button id="cinema-record-btn" class="hud-btn hud-btn-cinema" title="Record 60FPS Video">
-        <span>&#9679;</span> RECORD CINEMA
-      </button>
-
-      <button id="open-collision-modal-btn" class="hud-btn" title="Collide Two Universes">
-        <span>&#10038;</span> COLLIDE
-      </button>
-
-      <button id="open-upload-modal-btn" class="hud-btn" title="Upload Spotify JSON">
-        <span>&#8679;</span> ARCHIVE
-      </button>
-
-      <button id="open-spotify-modal-btn" class="hud-btn hud-btn-primary" title="Connect Spotify Account">
-        CONNECT SPOTIFY
-      </button>
+    <div class="top-actions">
+      <button id="view-toggle-btn" class="btn btn-quiet" aria-expanded="false" aria-controls="view-panel">View</button>
+      <button id="reset-camera-btn" class="btn btn-quiet">Show everything</button>
+      <button id="spotify-btn" class="btn btn-spotify">Connect Spotify</button>
     </div>
   </header>
 
-  <!-- Left Side Controls Panel -->
-  <aside id="floating-left-panel">
-    <div class="panel-header-title">Spatial Physics</div>
+  <!-- View settings popover -->
+  <section id="view-panel" class="panel" hidden aria-label="View settings">
+    <fieldset>
+      <legend>Show</legend>
+      <label><input type="checkbox" id="toggle-genres" checked> Clusters</label>
+      <label><input type="checkbox" id="toggle-artists" checked> Artists</label>
+      <label><input type="checkbox" id="toggle-tracks" checked> Songs</label>
+      <label><input type="checkbox" id="toggle-edges" checked> Connections</label>
+      <label><input type="checkbox" id="toggle-labels" checked> Names</label>
+    </fieldset>
+    <label class="slider">
+      <span>Motion <output id="orbit-speed-val">1×</output></span>
+      <input type="range" id="orbit-speed-slider" min="0" max="3" step="0.1" value="1">
+    </label>
+    <label class="slider">
+      <span>Planet size <output id="node-scale-val">1×</output></span>
+      <input type="range" id="node-scale-slider" min="0.5" max="2" step="0.1" value="1">
+    </label>
+  </section>
 
-    <button id="layout-mode-toggle" class="hud-btn" style="width: 100%; justify-content: center;">
-      GALAXY CLUSTERS
-    </button>
-
-    <div class="control-row">
-      <div class="control-label-row">
-        <span>Orbit Speed</span>
-        <span id="orbit-speed-val" class="control-value">1.0x</span>
-      </div>
-      <input type="range" id="orbit-speed-slider" class="hud-slider" min="0" max="3" step="0.1" value="1.0">
+  <!-- Right column: the cluster list, or details of whatever is selected. Never both. -->
+  <aside id="side-panel" class="panel" aria-live="polite">
+    <div id="cluster-view">
+      <h2 class="panel-heading">Clusters</h2>
+      <ol id="cluster-list"></ol>
     </div>
-
-    <div class="control-row">
-      <div class="control-label-row">
-        <span>Celestial Scale</span>
-        <span id="node-scale-val" class="control-value">1.0x</span>
-      </div>
-      <input type="range" id="node-scale-slider" class="hud-slider" min="0.5" max="2.0" step="0.1" value="1.0">
-    </div>
-
-    <div class="panel-header-title" style="margin-top: 6px;">Visibility Layers</div>
-    <div class="layer-toggle-list">
-      <label class="layer-checkbox-label">
-        <input type="checkbox" id="toggle-genres" checked>
-        <span>Galactic Suns (Genres)</span>
-      </label>
-      <label class="layer-checkbox-label">
-        <input type="checkbox" id="toggle-artists" checked>
-        <span>Planetary Bodies (Artists)</span>
-      </label>
-      <label class="layer-checkbox-label">
-        <input type="checkbox" id="toggle-tracks" checked>
-        <span>Lunar Satellites (Tracks)</span>
-      </label>
-      <label class="layer-checkbox-label">
-        <input type="checkbox" id="toggle-edges" checked>
-        <span>Synaptic Edge Pulses</span>
-      </label>
-      <label class="layer-checkbox-label">
-        <input type="checkbox" id="toggle-labels" checked>
-        <span>Frustum HUD Labels</span>
-      </label>
+    <div id="detail-view" hidden>
+      <button id="detail-back-btn" class="btn btn-quiet btn-back">All clusters</button>
+      <div id="detail-content"></div>
     </div>
   </aside>
 
-  <!-- Right Side Cluster Legend -->
-  <aside id="cluster-legend" aria-label="Clusters">
-    <div class="panel-header-title">Clusters</div>
-    <ol id="cluster-legend-list"></ol>
-  </aside>
-
-  <!-- Bottom-Left Active Galaxy Title -->
-  <div id="galaxy-info-banner">
-    <h2 id="galaxy-title-text">Cosmic Synth & Retrowave</h2>
-    <p id="galaxy-desc-text">Neon interstellar synth arpeggios, cyberpunk basslines, and French electro dreamscapes.</p>
+  <!-- Bottom-left: what you're looking at -->
+  <div id="universe-caption">
+    <h1 id="universe-title">Astra</h1>
+    <p id="universe-stats"></p>
+    <p id="universe-notice" hidden></p>
   </div>
 
-  <!-- 4D Temporal Scrubber (Blueprint 09) -->
-  <div id="bottom-scrubber-panel">
-    <div class="scrubber-info">
-      <span class="scrubber-title">4D Chronology</span>
-      <span id="time-machine-date-label">Present Day</span>
-    </div>
-
-    <button id="time-machine-play-btn" class="hud-btn">Play Time-Lapse</button>
-
-    <div class="scrubber-slider-wrap">
-      <input type="range" id="time-machine-slider" class="hud-slider" min="0" max="1" step="0.005" value="1">
+  <!-- Loading -->
+  <div id="loading-overlay" hidden>
+    <div class="loading-card">
+      <div class="loading-orbit" aria-hidden="true"><span></span></div>
+      <p class="loading-title">Charting your universe</p>
+      <p class="loading-text">Reading your top charts, recent plays and Liked Songs, then grouping every artist by sound. The first visit takes about half a minute.</p>
     </div>
   </div>
 
-  <!-- Multiplayer Collision Resonance Score Banner (Blueprint 08) -->
-  <div id="collision-resonance-banner"></div>
-
-  <!-- Cinema Recording Progress HUD Indicator -->
-  <div id="cinema-recording-progress">
-    <div class="progress-header">RECORDING 60FPS CINEMA TOUR...</div>
-    <div class="cinema-progress-track">
-      <div id="cinema-progress-bar"></div>
-    </div>
-  </div>
-
-  <!-- Right-Hand Telemetry Inspector Drawer -->
-  <div id="inspector-drawer">
-    <div class="drawer-header">
-      <div>
-        <span id="inspector-tier-badge" class="tier-badge">GALACTIC SUN</span>
-        <h3 id="inspector-node-name">Genre Name</h3>
-      </div>
-      <button id="close-inspector-btn" class="close-btn">&times;</button>
-    </div>
-
-    <!-- Core Physical Telemetry -->
-    <div class="telemetry-grid">
-      <div class="telemetry-card">
-        <div class="telemetry-label">Stream Count</div>
-        <div id="inspector-plays" class="telemetry-val">0</div>
-      </div>
-      <div class="telemetry-card">
-        <div class="telemetry-label">Listening Time</div>
-        <div id="inspector-hours" class="telemetry-val">0 hrs</div>
-      </div>
-      <div class="telemetry-card">
-        <div class="telemetry-label">Gravitational Mass</div>
-        <div id="inspector-mass" class="telemetry-val">1.0</div>
-      </div>
-      <div class="telemetry-card">
-        <div class="telemetry-label">Tier Gravity Share</div>
-        <div id="inspector-gravity-share" class="telemetry-val">0%</div>
-      </div>
-    </div>
-
-    <!-- Connected Relationships -->
-    <div class="connections-section">
-      <h4 id="inspector-connections-title">Orbital Connections</h4>
-      <div id="inspector-connections"></div>
-      <h4 id="inspector-subgenres-title">Genres</h4>
-      <div id="inspector-subgenres"></div>
-    </div>
-
-    <!-- Spotify Audio DNA Meters -->
-    <div class="audio-dna-section">
-      <h4>Spotify Audio DNA</h4>
-
-      <div class="dna-meter-row">
-        <div class="dna-meter-info">
-          <span>Valence (Modal Scale)</span>
-          <span id="val-valence">65% (Lydian)</span>
-        </div>
-        <div class="dna-meter-track">
-          <div id="bar-valence" class="dna-meter-bar"></div>
-        </div>
-      </div>
-
-      <div class="dna-meter-row">
-        <div class="dna-meter-info">
-          <span>Energy (Filter Cutoff)</span>
-          <span id="val-energy">75%</span>
-        </div>
-        <div class="dna-meter-track">
-          <div id="bar-energy" class="dna-meter-bar"></div>
-        </div>
-      </div>
-
-      <div class="dna-meter-row">
-        <div class="dna-meter-info">
-          <span>Danceability</span>
-          <span id="val-dance">60%</span>
-        </div>
-        <div class="dna-meter-track">
-          <div id="bar-dance" class="dna-meter-bar"></div>
-        </div>
-      </div>
-
-      <div class="dna-meter-row">
-        <div class="dna-meter-info">
-          <span>Acousticness</span>
-          <span id="val-acoustic">25%</span>
-        </div>
-        <div class="dna-meter-track">
-          <div id="bar-acoustic" class="dna-meter-bar"></div>
-        </div>
-      </div>
-
-      <div class="dna-meter-row">
-        <div class="dna-meter-info">
-          <span>Arpeggio Clock</span>
-          <span id="val-bpm" style="font-family: var(--font-mono); color: var(--neon-cyan);">120 BPM</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Live FFT Spectrum Visualizer (Blueprint 05) -->
-    <div class="visualizer-card">
-      <div class="telemetry-label">Web Audio API Spectrum</div>
-      <canvas id="fft-visualizer-canvas" width="300" height="55"></canvas>
-    </div>
-
-    <!-- Action Buttons -->
-    <div class="drawer-actions">
-      <button id="play-sonic-dna-btn" class="action-btn synth-btn">
-        <span class="btn-icon">&#9658;</span>
-        <span class="btn-text">Synthesize Sonic DNA</span>
-      </button>
-
-      <button id="fly-to-node-btn" class="action-btn">
-        <span>&#9678;</span>
-        <span>Fly To Celestial Body</span>
-      </button>
-
-      <a id="spotify-open-btn" class="action-btn spotify-btn" href="#" target="_blank" rel="noopener noreferrer" style="display: none;">
-        <span>&#9835;</span>
-        <span>Open in Spotify</span>
-      </a>
-    </div>
-  </div>
-
-  <!-- Spotify OAuth 2.0 PKCE Modal -->
-  <div id="spotify-modal" class="modal-overlay">
-    <div class="modal-box">
-      <h3 class="modal-title">Connect Live Spotify</h3>
-      <p class="modal-desc">
-        ASTRA's backend handles the Spotify login and keeps your tokens server-side, refreshing them automatically.
-      </p>
-
-      <div style="background: rgba(0, 240, 255, 0.06); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
-        <div style="font-size: 11px; font-weight: 700; color: var(--neon-cyan); letter-spacing: 0.5px;">ONE-TIME SERVER SETUP</div>
-        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-          1. In the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer" style="color: var(--spotify-green); text-decoration: underline; font-weight: 600;">Spotify Developer Dashboard</a>, open your app's <strong>Settings &rarr; Redirect URIs</strong> and add this exact URI:
-        </div>
-        <div style="display: flex; gap: 8px; align-items: center;">
-          <input type="text" id="spotify-redirect-uri-display" class="modal-input" readonly value="http://127.0.0.1:5173/api/auth/callback" style="background: rgba(4, 4, 10, 0.9); font-size: 11px; cursor: text;">
-          <button id="copy-redirect-uri-btn" class="hud-btn" type="button" style="white-space: nowrap;">Copy URI</button>
-        </div>
-        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-          2. Put your <strong>Client ID</strong> and <strong>Client Secret</strong> in <code>.env</code> as <code>SPOTIFY_CLIENT_ID</code> / <code>SPOTIFY_CLIENT_SECRET</code>, then restart <code>npm run dev</code>.<br>
-          3. Under <strong>User Management</strong>, add the email of every Spotify account that will log in (Development Mode only allows listed users).
-        </div>
-      </div>
-
-      <div class="modal-actions">
-        <button id="close-spotify-modal-btn" class="hud-btn">Cancel</button>
-        <button id="spotify-login-btn" class="hud-btn hud-btn-primary">Authorize &amp; Connect</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Extended JSON Archive Upload Modal -->
-  <div id="upload-modal" class="modal-overlay">
-    <div class="modal-box">
-      <h3 class="modal-title">Import Spotify GDPR Streaming Archive</h3>
-      <p class="modal-desc">
-        Select a <code>StreamingHistory_music_*.json</code> or <code>endsong_*.json</code> file exported from your Spotify privacy settings to unlock full multi-year 4D time-scrubbing.
-      </p>
-      <input type="file" id="json-file-input" class="modal-input" accept=".json">
-      <div class="modal-actions">
-        <button id="close-upload-modal-btn" class="hud-btn">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Multiplayer Galaxy Collision Modal (Blueprint 08) -->
-  <div id="collision-modal" class="modal-overlay">
-    <div class="modal-box">
-      <h3 class="modal-title">Multiplayer Galaxy Collision</h3>
-      <p class="modal-desc">
-        Initiate a 3D astrophysical galaxy merger between two taste profiles. Shared artists and genres will be drawn into the central L1 Lagrange Wormhole Bridge with Golden Supernova energy.
-      </p>
-      <div style="display: flex; gap: 12px;">
-        <div style="flex: 1;">
-          <div class="telemetry-label" style="margin-bottom: 4px;">Galaxy Alpha (Cyan)</div>
-          <select id="collision-select-a" class="modal-input">
-            <option value="cosmic_synth">Cosmic Synth</option>
-            <option value="lofi_indie">Neo-Psychedelia</option>
-            <option value="hyper_bass">Drum & Bass</option>
-          </select>
-        </div>
-        <div style="flex: 1;">
-          <div class="telemetry-label" style="margin-bottom: 4px;">Galaxy Beta (Magenta)</div>
-          <select id="collision-select-b" class="modal-input">
-            <option value="lofi_indie">Neo-Psychedelia</option>
-            <option value="hyper_bass" selected>Drum & Bass</option>
-            <option value="cosmic_synth">Cosmic Synth</option>
-          </select>
-        </div>
-      </div>
-      <div class="modal-actions">
-        <button id="close-collision-modal-btn" class="hud-btn">Cancel</button>
-        <button id="trigger-collision-btn" class="hud-btn hud-btn-cinema">Ignite Collision Merger</button>
-      </div>
-    </div>
-  </div>
+  <!-- Shown only when the server has no Spotify credentials -->
+  <dialog id="setup-dialog">
+    <h2>Spotify isn't set up on this server</h2>
+    <p>Add <code>SPOTIFY_CLIENT_ID</code> and <code>SPOTIFY_CLIENT_SECRET</code> to the server's environment, and register this redirect URI in your Spotify app:</p>
+    <p><code id="setup-redirect-uri"></code></p>
+    <form method="dialog"><button class="btn">Close</button></form>
+  </dialog>
 
   <script type="module" src="./src/main.js"></script>
 </body>

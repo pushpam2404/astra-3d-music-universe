@@ -158,7 +158,7 @@ export class CelestialFactory {
     const nebula = makeSprite(getNebulaTexture(node.color), nebulaSize, 0.26);
     nebula.renderOrder = -1;
     group.add(nebula);
-    this.register(node, nebula.material, 0.26);
+    node.nebula = nebula; // opacity driven by updateNebulae (focus × camera distance)
 
     group.add(new THREE.PointLight(node.color, 2.2, (node.clusterRadius || 80) * 1.6, 1.2));
 
@@ -206,8 +206,9 @@ export class CelestialFactory {
    * toggles and time machine keep working unchanged.
    */
   buildTrackSatellites(trackNodes) {
-    const geometry = new THREE.SphereGeometry(1, 12, 10);
-    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
+    const geometry = new THREE.SphereGeometry(1, 14, 10);
+    // Lit (not glowing) so moons read as small shaded spheres in their planet's color.
+    const material = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x111118 });
     const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, trackNodes.length));
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = false;
@@ -215,7 +216,8 @@ export class CelestialFactory {
     const white = new THREE.Color('#FFFFFF');
     trackNodes.forEach((node, i) => {
       node.instanceIndex = i;
-      node.baseInstanceColor = new THREE.Color(node.color || COLOR_SPOTIFY_GREEN).lerp(white, 0.3).multiplyScalar(0.85);
+      // Moons keep their planet's hue (only slightly lifted) so a system reads as one color.
+      node.baseInstanceColor = new THREE.Color(node.color || COLOR_SPOTIFY_GREEN).lerp(white, 0.2);
       node.meshGroup = { position: new THREE.Vector3(), scale: new THREE.Vector3(1, 1, 1), visible: true, isInstanceHandle: true };
       mesh.setColorAt(i, node.baseInstanceColor);
     });
@@ -416,6 +418,20 @@ export class CelestialFactory {
       edgesDirty = true;
     }
     if (edgesDirty) colors.needsUpdate = true;
+  }
+
+  /**
+   * Nebulae fade out as the camera flies into them: from inside, a cluster's cloud
+   * would cover the whole screen.
+   */
+  updateNebulae(camera, suns) {
+    for (const sun of suns) {
+      if (!sun.nebula) continue;
+      const size = sun.nebula.scale.x;
+      const d = camera.position.distanceTo(sun.position);
+      const fade = THREE.MathUtils.smoothstep(d, size * 0.35, size * 0.9);
+      sun.nebula.material.opacity = 0.26 * (sun.focusLevel ?? 1) * fade;
+    }
   }
 
   updateSolarShaders(time) {
