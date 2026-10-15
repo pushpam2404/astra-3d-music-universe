@@ -6,14 +6,15 @@
  *    and country, so a shared "qawwali" or "India" counts more than a shared "pop")
  *    blended with genre-family overlap, plus a bonus for collaborating on a top track.
  * 2. Louvain community detection on that graph finds the clusters.
- * 3. Tiny clusters are merged into their best-linked neighbour, isolated artists go to
- *    "Eclectic" (has genres) or "Uncharted" (no genre data at all).
- * 4. Each cluster is named after its dominant fine genre or family, and artists with
- *    strong ties to a second cluster are marked as bridges.
+ * 3. Splinter clusters (under ~1% of artists) merge into their best-linked neighbour;
+ *    isolated artists join the cluster they resemble most, or "Uncharted" if nothing.
+ * 4. clusterNaming.js names each cluster by its most distinctive genres and home, and
+ *    artists with strong ties to a second cluster are marked as bridges.
  */
 import Graph from 'graphology';
 import louvain from 'graphology-communities-louvain';
-import { familyVector, familyInfo, familiesForGenre, OTHER_FAMILY, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
+import { familyVector, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
+import { describeClusters } from './clusterNaming.js';
 
 const LOUVAIN_RESOLUTION = 1.3;
 // Countries are a scene signal, slightly weaker than an actual genre tag.
@@ -50,38 +51,6 @@ function famCosine(a, b) {
   return na && nb ? cosine(a, b) / (na * nb) : 0;
 }
 
-const COUNTRY_SHORT = { 'United States': 'US', 'United States of America': 'US', 'United Kingdom': 'UK' };
-const shortCountry = (c) => COUNTRY_SHORT[c] || c;
-
-const titleCase = (s) => s.replace(/\b([a-z])/g, (m) => m.toUpperCase()).replace(/\bR&b\b/, 'R&B');
-
-function hexToHsl(hex) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  if (max === min) return [0, 0, l];
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return [h * 60, s, l];
-}
-
-function hslToHex(h, s, l) {
-  const k = (n) => (n + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))));
-  return `#${[f(0), f(8), f(4)].map(v => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-}
-
-/** Shifts the hue so that two clusters of the same family stay distinguishable. */
-function variantColor(hex, variantIndex) {
-  if (variantIndex === 0) return hex;
-  const [h, s, l] = hexToHsl(hex);
-  const step = Math.ceil(variantIndex / 2) * 22 * (variantIndex % 2 ? 1 : -1);
-  return hslToHex((h + step + 360) % 360, s, Math.min(0.72, l + 0.04));
-}
-
 /**
  * @param {Array<{id, name, genres: string[], countries: string[], score: number}>} artists  genres normalized
  * @param {Map<string, number>} collabs  key "idA|idB" (sorted) → number of shared top tracks
@@ -109,16 +78,19 @@ export function clusterArtists(artists, collabs) {
   // Pairwise link weights.
   const weight = new Map();
   const key = (x, y) => (x < y ? `${x}|${y}` : `${y}|${x}`);
+  const rawSim = (a, b) => {
+    let w = 0;
+    if (a.tags.length && b.tags.length) {
+      w = 0.55 * cosine(a.tfidf, b.tfidf) + 0.45 * famCosine(a.fam, b.fam);
+    }
+    const shared = collabs.get(key(a.id, b.id)) || 0;
+    if (shared) w += Math.min(1, 0.45 * shared);
+    return w;
+  };
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const a = artists[i], b = artists[j];
-      let w = 0;
-      if (a.tags.length && b.tags.length) {
-        w = 0.55 * cosine(a.tfidf, b.tfidf) + 0.45 * famCosine(a.fam, b.fam);
-      }
-      const shared = collabs.get(key(a.id, b.id)) || 0;
-      if (shared) w += Math.min(1, 0.45 * shared);
-      if (w >= EDGE_THRESHOLD) weight.set(key(a.id, b.id), w);
+      const w = rawSim(artists[i], artists[j]);
+      if (w >= EDGE_THRESHOLD) weight.set(key(artists[i].id, artists[j].id), w);
     }
   }
   const linkW = (x, y) => (x === y ? 0 : weight.get(key(x, y)) || 0);
@@ -135,11 +107,10 @@ export function clusterArtists(artists, collabs) {
     : {};
 
   let clusters = new Map();
-  const uncharted = [];
-  const eclectic = [];
+  const orphans = [];
   artists.forEach(a => {
     if (graph.degree(a.id) === 0) {
-      (a.tags.length ? eclectic : uncharted).push(a.id);
+      orphans.push(a.id);
       return;
     }
     const c = communityOf[a.id];
@@ -148,110 +119,58 @@ export function clusterArtists(artists, collabs) {
   });
   clusters = [...clusters.values()];
 
-  // Merge tiny / overflow clusters into their best-linked neighbour.
+  // Merge splinters and overflow into their best-linked neighbour. Artists left
+  // without any community join the cluster they resemble most, however weakly; only
+  // artists with no signal at all end up "Uncharted".
+  const minClusterSize = Math.max(4, Math.round(n * 0.01));
   const linkage = (A, B) => {
     let sum = 0;
     A.forEach(x => B.forEach(y => { sum += linkW(x, y); }));
     return sum / (A.length * B.length);
   };
+  const rawLinkage = (id, C) => {
+    const a = byId.get(id);
+    let sum = 0;
+    C.forEach(y => { if (y !== id) sum += rawSim(a, byId.get(y)); });
+    return sum / C.length;
+  };
+
   let merged = true;
   while (merged && clusters.length > 1) {
     merged = false;
     clusters.sort((A, B) => A.length - B.length);
     for (let i = 0; i < clusters.length; i++) {
       const C = clusters[i];
+      if (C.length >= minClusterSize && !(clusters.length > maxClusters && i === 0)) continue;
       let best = -1, bestLink = 0;
       clusters.forEach((D, j) => {
         if (j === i) return;
         const l = linkage(C, D);
         if (l > bestLink) { bestLink = l; best = j; }
       });
-      const overflow = clusters.length > maxClusters && i === 0;
-      const tooSmall = (C.length === 1 && bestLink > 0.05) || (C.length === 2 && bestLink > 0.2);
-      if (best >= 0 && (overflow || tooSmall)) {
+      if (best < 0) {
+        orphans.push(...C);
+      } else {
         clusters[best].push(...C);
-        clusters.splice(i, 1);
-        merged = true;
-        break;
       }
-      if (overflow) {
-        // Nothing links to it at all.
-        eclectic.push(...C);
-        clusters.splice(i, 1);
-        merged = true;
-        break;
-      }
+      clusters.splice(i, 1);
+      merged = true;
+      break;
     }
   }
-  // Singletons that never found a home read better grouped together.
-  clusters = clusters.filter(C => {
-    if (C.length > 1) return true;
-    eclectic.push(...C);
-    return false;
+
+  const uncharted = [];
+  orphans.forEach(id => {
+    let best = -1, bestLink = 0.02;
+    clusters.forEach((C, j) => {
+      const l = rawLinkage(id, C);
+      if (l > bestLink) { bestLink = l; best = j; }
+    });
+    if (best >= 0) clusters[best].push(id);
+    else uncharted.push(id);
   });
 
-  // Describe each cluster. A country only names a cluster when it is distinctive there.
-  const globalCountry = new Map();
-  artists.forEach(a => new Set(a.countries).forEach(c => globalCountry.set(c, (globalCountry.get(c) || 0) + 1)));
-  const scoreOf = (id) => byId.get(id).score || 1;
-  const familyUse = new Map();
-  const usedNames = new Set();
-  const described = [];
-
-  const describe = (members, forcedFamily) => {
-    const famScore = {};
-    const genreScore = new Map();
-    const genreCount = new Map();
-    const countryCount = new Map();
-    members.forEach(id => {
-      const a = byId.get(id);
-      Object.entries(a.fam).forEach(([f, w]) => { famScore[f] = (famScore[f] || 0) + w * scoreOf(id); });
-      new Set(a.countries).forEach(c => countryCount.set(c, (countryCount.get(c) || 0) + 1));
-      new Set(a.genres).forEach(g => {
-        genreScore.set(g, (genreScore.get(g) || 0) + scoreOf(id));
-        genreCount.set(g, (genreCount.get(g) || 0) + 1);
-      });
-    });
-    const family = forcedFamily || familyInfo(Object.entries(famScore).sort((x, y) => y[1] - x[1])[0]?.[0] || OTHER_FAMILY.id);
-    const topGenres = [...genreScore.entries()].sort((x, y) => y[1] - x[1]).map(([g]) => g);
-    const lead = topGenres[0];
-    const [topCountry, topCountryCount] = [...countryCount.entries()].sort((x, y) => y[1] - x[1])[0] || [];
-    const share = topCountry ? topCountryCount / members.length : 0;
-    const globalShare = topCountry ? globalCountry.get(topCountry) / n : 1;
-    const scene = share >= 0.6 && share >= 1.5 * globalShare ? shortCountry(topCountry) : null;
-
-    const candidates = [];
-    // A genre names the cluster only if it belongs to the cluster's family (no gold "Pop" cluster of qawwali).
-    if (!forcedFamily && lead && genreCount.get(lead) / members.length >= 0.5 && familiesForGenre(lead).includes(family.id)) {
-      candidates.push(titleCase(lead));
-    }
-    if (!forcedFamily && scene) candidates.push(`${family.label} · ${scene}`);
-    candidates.push(family.label);
-    if (lead) candidates.push(`${family.label} · ${titleCase(lead)}`);
-    let name = candidates.find(c => !usedNames.has(c.toUpperCase())) || `${family.label} ${described.length + 1}`;
-    usedNames.add(name.toUpperCase());
-
-    const variant = familyUse.get(family.id) || 0;
-    familyUse.set(family.id, variant + 1);
-
-    const cluster = {
-      id: `cluster_${described.length}_${family.id}`,
-      name,
-      family: family.id,
-      familyLabel: family.label,
-      color: variantColor(family.color, variant),
-      subgenres: topGenres.slice(0, 6).map(titleCase),
-      members
-    };
-    described.push(cluster);
-    return cluster;
-  };
-
-  clusters
-    .sort((A, B) => B.reduce((s, id) => s + scoreOf(id), 0) - A.reduce((s, id) => s + scoreOf(id), 0))
-    .forEach(members => describe(members));
-  if (eclectic.length) describe(eclectic, OTHER_FAMILY);
-  if (uncharted.length) describe(uncharted, UNCLASSIFIED_FAMILY);
+  const described = describeClusters(clusters, uncharted, byId, n);
 
   // Assignment + bridges.
   const clusterOf = new Map();

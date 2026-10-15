@@ -208,11 +208,12 @@ export async function buildUniverseDataset(api) {
 
   const genres = clusters.map(c => ({
     id: c.id,
-    name: c.name.toUpperCase(),
+    name: c.name,
     color: c.color,
     family: c.family,
     familyLabel: c.familyLabel,
     subgenres: c.subgenres,
+    topArtists: c.topArtists,
     affinity: affinityMatrix[c.id],
     basePlays: c.members.reduce((s, id) => s + (artistScore.get(id) || 0), 0),
     ...estimatedFeatures(c.id)

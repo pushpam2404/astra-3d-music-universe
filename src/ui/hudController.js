@@ -340,7 +340,8 @@ export class HudController {
           </span>
           <span class="legend-count">${sun.neighbors?.size || 0}</span>`;
         li.querySelector('.legend-name').textContent = sun.name;
-        li.querySelector('.legend-sub').textContent = (sun.subgenres || []).slice(0, 3).join(' · ') || sun.familyLabel || '';
+        // Top artists say more about a cluster than repeating its genre names.
+        li.querySelector('.legend-sub').textContent = (sun.topArtists || sun.subgenres || []).slice(0, 3).join(' · ') || sun.familyLabel || '';
         const select = () => this.cb.onSelectNode(sun);
         li.addEventListener('click', select);
         li.addEventListener('keydown', (e) => { if (e.key === 'Enter') select(); });
