@@ -45,14 +45,32 @@ const FAMILY_MATCHERS = Object.entries(GENRE_FAMILIES).map(([id, fam]) => ({
   regex: new RegExp(`(?:^|[\\s/&,(])(?:${fam.keywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`)
 }));
 
-/** "Hip-hop music" → "hip hop"; "Contemporary R&B" → "contemporary r&b" */
+// Different sources say the same thing differently (Wikidata vs MusicBrainz tags).
+const GENRE_ALIASES = {
+  'indian film': 'filmi',
+  'bollywood': 'filmi',
+  'hindi film': 'filmi',
+  'film': 'filmi',
+  'rhythm and blues': 'r&b',
+  'rnb': 'r&b',
+  'electronic dance': 'edm',
+  'hiphop': 'hip hop',
+  'rap music': 'rap',
+  'singer/songwriter': 'singer songwriter',
+  'alt rock': 'alternative rock',
+  'alternative': 'alternative rock',
+  'indie': 'indie pop'
+};
+
+/** "Hip-hop music" → "hip hop"; "Indian film music" → "filmi" */
 export function normalizeGenre(raw) {
-  return String(raw)
+  const g = String(raw)
     .toLowerCase()
     .replace(/[-_]/g, ' ')
     .replace(/\s+music$/, '')
     .replace(/\s+/g, ' ')
     .trim();
+  return GENRE_ALIASES[g] || g;
 }
 
 /** Returns the family ids a single normalized genre belongs to. */
