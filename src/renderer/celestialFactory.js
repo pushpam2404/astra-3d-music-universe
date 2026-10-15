@@ -195,15 +195,18 @@ export class CelestialFactory {
     group.position.copy(node.position);
 
     const seed = (parseInt(String(node.id).slice(-6), 36) % 997) / 997 || 0.3;
-    const planetMat = createFresnelPlanetMaterial(node.color, node.valence ?? 0.6, seed);
+    const listen = node.normScore ?? 1;
+    const planetMat = createFresnelPlanetMaterial(node.color, node.valence ?? 0.6, seed, listen);
     const sphereMesh = new THREE.Mesh(new THREE.SphereGeometry(node.baseRadius, 32, 32), planetMat);
     sphereMesh.userData = { node };
     group.add(sphereMesh);
     this.register(node, planetMat, 1.0, true);
 
-    const glow = makeSprite(getProceduralGlowTexture(node.color), node.baseRadius * 3.0, 0.2);
+    // Halo strength follows listening too: favourites glow, the long tail barely does.
+    const haloOpacity = 0.05 + 0.25 * listen * listen;
+    const glow = makeSprite(getProceduralGlowTexture(node.color), node.baseRadius * 3.0, haloOpacity);
     group.add(glow);
-    this.register(node, glow.material, 0.2, false, true);
+    this.register(node, glow.material, haloOpacity, false, true);
 
     // Ring marks each cluster's headline artist.
     if (node.labelRank === 0 && !node.isBridge) {

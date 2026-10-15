@@ -73,7 +73,9 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
     const span = Math.max(1e-6, tierStat.maxLog - tierStat.minLog);
     const normScore = Math.max(0.0, Math.min(1.0, (node.logPlays - tierStat.minLog) / span));
 
-    const baseRadius = bounds.minR + normScore * (bounds.maxR - bounds.minR);
+    // curve > 1 keeps the long tail small and lets the top stand out.
+    const sizeScore = Math.pow(normScore, bounds.curve || 1);
+    const baseRadius = bounds.minR + sizeScore * (bounds.maxR - bounds.minR);
     const haloRadius = baseRadius * bounds.haloMult;
 
     return {

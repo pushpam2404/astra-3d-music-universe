@@ -6,7 +6,10 @@ import * as THREE from 'three';
  * atmospheric rim. uOpacity drives focus dimming by darkening (planets stay opaque;
  * translucent planets read as soap bubbles).
  */
-export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0) {
+/**
+ * @param {number} listen  0..1 how much you listen (normScore); heavily played planets shine brighter.
+ */
+export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0, listen = 1) {
   const base = new THREE.Color(hexColor);
   const rimColor = base.clone().lerp(new THREE.Color('#FFFFFF'), 0.45);
 
@@ -16,7 +19,8 @@ export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0) 
       uRimColor: { value: rimColor },
       uBandShift: { value: seed * 6.2831 },
       uBandStrength: { value: 0.12 + valence * 0.12 },
-      uOpacity: { value: 1.0 }
+      uOpacity: { value: 1.0 },
+      uListen: { value: listen }
     },
     vertexShader: /* glsl */ `
       varying vec3 vNormal;
@@ -37,6 +41,7 @@ export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0) 
       uniform float uBandShift;
       uniform float uBandStrength;
       uniform float uOpacity;
+      uniform float uListen;
       varying vec3 vNormal;
       varying vec3 vViewPosition;
       varying vec3 vLocal;
@@ -52,7 +57,8 @@ export function createFresnelPlanetMaterial(hexColor, valence = 0.65, seed = 0) 
         float bands = sin(vLocal.y * 9.0 + uBandShift + sin(vLocal.x * 4.0 + uBandShift) * 0.6);
         vec3 surface = uBaseColor * (1.0 + bands * uBandStrength);
 
-        float lit = max(uOpacity, 0.16);
+        // Long-tail artists are dimmer; favourites glow at full strength.
+        float lit = max(uOpacity, 0.16) * (0.45 + 0.55 * uListen);
         vec3 color = surface * (0.22 + 0.78 * diff) * lit + uRimColor * rim * 0.55 * lit * lit;
         gl_FragColor = vec4(color, 1.0);
       }

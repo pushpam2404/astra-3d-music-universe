@@ -114,6 +114,9 @@ export class GalaxyLayoutEngine {
       a.systemRadius = a.baseRadius + C.moonInnerGap + (count ? C.moonSpacing * Math.sqrt(count) * 1.6 : 0);
     });
 
+    // Overall listening rank: your top artists get names wherever they sit.
+    artists.slice().sort((a, b) => b.plays - a.plays).forEach((a, i) => { a.globalRank = i; });
+
     // Partition artists: cloud members of their primary sun vs bridges.
     const members = new Map(suns.map(s => [s.id, []]));
     const bridges = [];

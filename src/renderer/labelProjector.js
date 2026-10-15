@@ -5,6 +5,7 @@ const tempProjVec = new THREE.Vector3();
 const LABEL_PADDING = 4;
 // Without focus, each cluster shows its top N artists by name.
 const TOP_ARTISTS_PER_CLUSTER = 3;
+const TOP_ARTISTS_OVERALL = 12;
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -38,6 +39,7 @@ export class LabelProjector {
     if (el) return el;
     el = document.createElement('div');
     el.className = `celestial-hud-label label-${node.type}`;
+    if (node.type === 'artist' && (node.globalRank ?? 99) < TOP_ARTISTS_OVERALL) el.classList.add('label-favourite');
     if (node.isWormholeBridge) el.classList.add('label-wormhole');
     if (node.isBridge) el.classList.add('label-bridge');
 
@@ -92,7 +94,11 @@ export class LabelProjector {
     }
     if (node.type === 'genre') return 1;
     if (node.isWormholeBridge) return 2;
-    if (node.type === 'artist' && (node.labelRank ?? 99) < TOP_ARTISTS_PER_CLUSTER) return 3 + node.labelRank;
+    if (node.type === 'artist') {
+      // Your overall favourites are always named; then each cluster's top few.
+      if ((node.globalRank ?? 99) < TOP_ARTISTS_OVERALL) return 2;
+      if ((node.labelRank ?? 99) < TOP_ARTISTS_PER_CLUSTER) return 3 + node.labelRank;
+    }
     return -1;
   }
 
@@ -140,13 +146,26 @@ export class LabelProjector {
         c.node.labelSize = { w: c.el.offsetWidth || 80, h: c.el.offsetHeight || 22 };
       }
       const { w: lw, h: lh } = c.node.labelSize;
-      const rect = { x0: c.x - lw / 2 - LABEL_PADDING, x1: c.x + lw / 2 + LABEL_PADDING, y0: c.y - lh - LABEL_PADDING, y1: c.y + LABEL_PADDING };
-      const blocked = c.priority > 0 && this.placed.some(r => rect.x0 < r.x1 && rect.x1 > r.x0 && rect.y0 < r.y1 && rect.y1 > r.y0);
-      if (blocked) {
+      // Preferred spot is above the body; if taken, try below, right, then left.
+      const spots = [[0, 0], [0, lh + 16], [lw / 2 + 14, lh / 2 + 8], [-(lw / 2 + 14), lh / 2 + 8]];
+      let placedAt = null;
+      for (const [dx, dy] of spots) {
+        const x = c.x + dx;
+        const y = c.y + dy;
+        const rect = { x0: x - lw / 2 - LABEL_PADDING, x1: x + lw / 2 + LABEL_PADDING, y0: y - lh - LABEL_PADDING, y1: y + LABEL_PADDING };
+        const blocked = c.priority > 0 && this.placed.some(r => rect.x0 < r.x1 && rect.x1 > r.x0 && rect.y0 < r.y1 && rect.y1 > r.y0);
+        if (!blocked) {
+          placedAt = { x, y, rect };
+          break;
+        }
+      }
+      if (!placedAt) {
         this.hide(c.el);
         continue;
       }
-      this.placed.push(rect);
+      this.placed.push(placedAt.rect);
+      c.x = placedAt.x;
+      c.y = placedAt.y;
 
       const focused = activeNode && (c.priority <= 2);
       const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.8'));

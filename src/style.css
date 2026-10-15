@@ -651,6 +651,11 @@ button.chip:hover {
   color: var(--muted);
 }
 
+.label-favourite {
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .label-track {
   font-size: 11px;
   color: var(--muted);

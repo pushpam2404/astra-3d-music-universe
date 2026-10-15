@@ -6,7 +6,8 @@
 // Visual radius range per tier (log-scaled by play count in graphNormalizer).
 export const TIER_BOUNDS = {
   genre: { minR: 5.0, maxR: 9.0, haloMult: 4.0 },
-  artist: { minR: 1.3, maxR: 3.8, haloMult: 2.6 },
+  // Wide range + curve (graphNormalizer) so artists you play a lot are unmistakably bigger.
+  artist: { minR: 1.0, maxR: 6.0, haloMult: 2.6, curve: 1.6 },
   track: { minR: 0.45, maxR: 1.0, haloMult: 2.2 }
 };
 
