@@ -6,7 +6,10 @@
  * browser keeps what was learned (see artistMetaCache.js) so later loads only ask
  * about the rest.
  *
- * Looks artists up by name with autocorrect (or by MusicBrainz id when given).
+ * Disambiguation: Last.fm merges same-name artists into one page ("King" mixes several
+ * artists' tags), so we first ask for the tags of the artist's most-played *track* in
+ * this library, which pins down the right one. Only if that track has no tags do we
+ * fall back to the artist page.
  * Requires LASTFM_API_KEY; without it this is a no-op.
  */
 import { usefulTags } from './tagFilter.js';
@@ -28,37 +31,45 @@ export function isLastfmConfigured() {
   return Boolean(process.env.LASTFM_API_KEY);
 }
 
-async function topTags({ name, mbid }) {
-  const params = new URLSearchParams({ method: 'artist.gettoptags', api_key: process.env.LASTFM_API_KEY, format: 'json' });
-  if (mbid) params.set('mbid', mbid);
-  else {
-    params.set('artist', name);
-    params.set('autocorrect', '1');
-  }
+// A track needs at least this many useful tags to be trusted over the artist page.
+const MIN_TRACK_TAGS = 2;
+
+/** "Song (feat. X) - Remastered 2011" → "Song" */
+const cleanTrackName = (t) => t.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+-\s+.*$/, '').trim();
+
+async function lastfmTags(method, params, artistName) {
+  const query = new URLSearchParams({ method, api_key: process.env.LASTFM_API_KEY, format: 'json', autocorrect: '1', ...params });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const res = await fetch(`${API}?${params}`, { signal: controller.signal, headers: { 'User-Agent': 'ASTRA-music-universe/1.0' } });
+    const res = await fetch(`${API}?${query}`, { signal: controller.signal, headers: { 'User-Agent': 'ASTRA-music-universe/1.0' } });
     const json = await res.json().catch(() => ({}));
-    // Error 6: unknown artist/mbid. With an mbid that Last.fm doesn't know, retry by name.
-    if (json.error === 6 && mbid) return topTags({ name });
     if (json.error === 29) throw Object.assign(new Error('rate limited'), { rateLimited: true });
     if (json.error) return [];
     const tags = (json.toptags?.tag || []).map(t => ({ name: t.name, count: Number(t.count) }));
-    return usefulTags(tags, name, { max: 6, minCount: MIN_TAG_WEIGHT });
+    return usefulTags(tags, artistName, { max: 6, minCount: MIN_TAG_WEIGHT });
   } finally {
     clearTimeout(timer);
   }
 }
 
+/** Track tags first (unambiguous), artist page as the fallback. */
+async function topTags({ name, track }) {
+  if (track) {
+    const trackTags = await lastfmTags('track.gettoptags', { artist: name, track: cleanTrackName(track) }, name);
+    if (trackTags.length >= MIN_TRACK_TAGS) return { tags: trackTags, via: 'track' };
+  }
+  return { tags: await lastfmTags('artist.gettoptags', { artist: name }, name), via: 'artist' };
+}
+
 /**
- * @param {Array<{id, name, mbid?}>} artists  in priority order
+ * @param {Array<{id, name, track?}>} artists  in priority order; track = their most-played song here
  * @param {number} budgetMs  stop starting new lookups after this long
- * @returns {{ tagsById: Map<id, string[]>, looked: number, skipped: number, error?: string }}
+ * @returns {{ tagsById: Map<id, string[]>, looked: number, viaTrack: number, skipped: number, error?: string }}
  */
 export async function fetchLastfmTags(artists, budgetMs) {
   const tagsById = new Map();
-  if (!isLastfmConfigured() || artists.length === 0) return { tagsById, looked: 0, skipped: 0 };
+  if (!isLastfmConfigured() || artists.length === 0) return { tagsById, looked: 0, viaTrack: 0, skipped: 0 };
 
   const now = Date.now();
   const queue = [];
@@ -70,6 +81,7 @@ export async function fetchLastfmTags(artists, budgetMs) {
 
   const deadline = now + budgetMs;
   let looked = 0;
+  let viaTrack = 0;
   let rateLimited = false;
   let next = 0;
   const worker = async () => {
@@ -77,10 +89,11 @@ export async function fetchLastfmTags(artists, budgetMs) {
       const a = queue[next++];
       const started = Date.now();
       try {
-        const tags = await topTags(a);
+        const { tags, via } = await topTags(a);
         cache.set(a.id, { tags, fetchedAt: Date.now() });
         tagsById.set(a.id, tags);
         looked++;
+        if (via === 'track') viaTrack++;
       } catch (err) {
         if (err.rateLimited) rateLimited = true;
       }
@@ -91,5 +104,5 @@ export async function fetchLastfmTags(artists, budgetMs) {
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   const skipped = queue.length - looked;
-  return { tagsById, looked, skipped, ...(rateLimited ? { error: 'Last.fm rate limit reached' } : {}) };
+  return { tagsById, looked, viaTrack, skipped, ...(rateLimited ? { error: 'Last.fm rate limit reached' } : {}) };
 }

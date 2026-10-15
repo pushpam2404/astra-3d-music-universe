@@ -35,6 +35,8 @@ const METADATA_BUDGET_MS = 26000;
 // Client-cached metadata is trusted this long; "nothing found" is rechecked sooner.
 const KNOWN_META_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const KNOWN_EMPTY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Bump when the Last.fm lookup method changes, so browsers re-check their cached artists.
+const LASTFM_METHOD_VERSION = 2;
 // Same cap for fresh and remembered genres, so a cached load clusters identically.
 const MAX_GENRES_PER_ARTIST = 16;
 const SAVED_TRACK_SCORE = 120;
@@ -159,10 +161,11 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
   //    Spotify's own genres (empty for Dev Mode apps) → what the browser already knows →
   //    fresh lookups (Wikidata + MusicBrainz in parallel, then Last.fm with the time left).
   const metaStart = Date.now();
-  // Entries learned before Last.fm was configured (no `l` flag) are re-checked once it is.
+  // Entries learned with an older Last.fm method (`l` below LASTFM_METHOD_VERSION, or
+  // before Last.fm was configured) are re-checked once.
   const lastfmOn = isLastfmConfigured();
   const isFresh = (m) => m && Array.isArray(m.g)
-    && !(lastfmOn && !m.l)
+    && !(lastfmOn && !(Number(m.l) >= LASTFM_METHOD_VERSION))
     && Date.now() - (Number(m.t) || 0) < (m.g.length ? KNOWN_META_TTL_MS : KNOWN_EMPTY_TTL_MS);
   // knownMeta comes from the browser: keep only well-formed strings.
   const cleanList = (list, max) => (Array.isArray(list) ? list.filter(x => typeof x === 'string' && x.length < 60).slice(0, max) : []);
@@ -171,10 +174,16 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
 
   // All three sources run in parallel; Last.fm (one request per artist) gets the
   // whole budget, most-listened artists first.
+  // Each artist's most-played song here, so Last.fm can tell same-name artists apart.
+  const signatureTrack = new Map();
+  topTracks.forEach(t => {
+    const primary = t.artists[0]?.id;
+    if (primary && !signatureTrack.has(primary)) signatureTrack.set(primary, t.name);
+  });
   const lastfmQueue = unknown
     .slice()
     .sort((x, y) => (artistScore.get(y.id) || 0) - (artistScore.get(x.id) || 0))
-    .map(a => ({ id: a.id, name: a.name }));
+    .map(a => ({ id: a.id, name: a.name, track: signatureTrack.get(a.id) }));
   const noMeta = { metaById: new Map() };
   const [wd, mb, lf] = unknownIds.length
     ? await Promise.all([
@@ -186,7 +195,7 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
   if (wd.error) diagnostics.warnings.push(`Wikidata lookup failed (${wd.error}).`);
   if (mb.error) diagnostics.warnings.push(`MusicBrainz lookup failed (${mb.error}).`);
   if (lf.error) diagnostics.warnings.push(`${lf.error}; the rest will be looked up on the next load.`);
-  diagnostics.lastfm = lastfmOn ? { looked: lf.looked, pending: lf.skipped } : 'LASTFM_API_KEY not set';
+  diagnostics.lastfm = lastfmOn ? { looked: lf.looked, viaTrack: lf.viaTrack, pending: lf.skipped } : 'LASTFM_API_KEY not set';
 
   const genreSource = { spotify: 0, remembered: 0, enriched: 0, none: 0 };
   const artistGenres = new Map();
@@ -217,7 +226,7 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
       else genreSource.none++;
       // Remember it unless Last.fm still owes us a lookup for this artist.
       const lastfmPending = lastfmOn && !lf.tagsById.has(a.id);
-      if (!lastfmPending) artistMeta[a.id] = { g: genres, c: countries, t: now, ...(lastfmOn ? { l: 1 } : {}) };
+      if (!lastfmPending) artistMeta[a.id] = { g: genres, c: countries, t: now, ...(lastfmOn ? { l: LASTFM_METHOD_VERSION } : {}) };
     }
     artistGenres.set(a.id, genres);
     artistFeatures.set(a.id, { genres, countries });
