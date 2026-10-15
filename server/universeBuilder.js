@@ -8,7 +8,10 @@
  *  - GET /artists?ids= (batch) was removed. Artist genres come back empty anyway, so
  *    track artists are used as-is (simplified objects) instead of being fetched.
  *  - Genres, country and occupation come from Wikidata and MusicBrainz (both matched
- *    by exact Spotify artist id).
+ *    by exact Spotify artist id) and Last.fm community tags.
+ *
+ * The browser sends back what earlier loads learned (`knownMeta`), so lookups only run
+ * for artists it hasn't seen; this is the persistent cache (no database needed).
  *  - Artist followers/popularity and track popularity were removed.
  *  - Audio features are unavailable to new apps, so features are derived
  *    deterministically from the Spotify id (stable across reloads, not real).
@@ -16,6 +19,7 @@
 import { normalizeGenre, OCCUPATION_GENRES } from '../src/config/genreTaxonomy.js';
 import { fetchWikidataArtistMeta } from './genreEnrichment.js';
 import { fetchMusicBrainzArtistMeta } from './musicbrainz.js';
+import { fetchLastfmTags, isLastfmConfigured } from './lastfm.js';
 import { clusterArtists } from './clustering.js';
 
 const PAGE_SIZE = 50;
@@ -26,6 +30,14 @@ const PAGE_CONCURRENCY = 4;
 // Longer horizons say more about lasting taste.
 const RANGE_WEIGHTS = { short_term: 1.0, medium_term: 1.2, long_term: 1.5 };
 const RECENT_PLAY_SCORE = 250;
+// Total time the whole metadata step may take on a load; Last.fm gets what's left.
+const METADATA_BUDGET_MS = 26000;
+const MIN_LASTFM_BUDGET_MS = 8000;
+// Client-cached metadata is trusted this long; "nothing found" is rechecked sooner.
+const KNOWN_META_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const KNOWN_EMPTY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Same cap for fresh and remembered genres, so a cached load clusters identically.
+const MAX_GENRES_PER_ARTIST = 16;
 const SAVED_TRACK_SCORE = 120;
 
 function hashUnit(str, salt) {
@@ -83,7 +95,7 @@ async function optionalSource(diagnostics, label, fn) {
   }
 }
 
-export async function buildUniverseDataset(api) {
+export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
   const diagnostics = { warnings: [] };
   const ranges = Object.keys(RANGE_WEIGHTS);
 
@@ -144,31 +156,67 @@ export async function buildUniverseDataset(api) {
   const includedArtists = [...artistsById.values()];
   const topTracks = [...tracksById.values()].sort((x, y) => trackScore.get(y.id) - trackScore.get(x.id));
 
-  // 3. Genres: Spotify's own when present (empty for Dev Mode apps), otherwise the union of
-  //    Wikidata genres and MusicBrainz tags. Country (MusicBrainz first, it is cleaner) and
-  //    occupation drive clustering for artists whose genre tags are missing or generic.
-  const ids = includedArtists.map(a => a.id);
-  const [wd, mb] = await Promise.all([fetchWikidataArtistMeta(ids), fetchMusicBrainzArtistMeta(ids)]);
+  // 3. Genres, country and occupation for every artist. Order of preference:
+  //    Spotify's own genres (empty for Dev Mode apps) → what the browser already knows →
+  //    fresh lookups (Wikidata + MusicBrainz in parallel, then Last.fm with the time left).
+  const metaStart = Date.now();
+  const isFresh = (m) => m && Array.isArray(m.g) && Date.now() - (Number(m.t) || 0) < (m.g.length ? KNOWN_META_TTL_MS : KNOWN_EMPTY_TTL_MS);
+  // knownMeta comes from the browser: keep only well-formed strings.
+  const cleanList = (list, max) => (Array.isArray(list) ? list.filter(x => typeof x === 'string' && x.length < 60).slice(0, max) : []);
+  const unknown = includedArtists.filter(a => !(a.genres || []).length && !isFresh(knownMeta[a.id]));
+  const unknownIds = unknown.map(a => a.id);
+
+  const [wd, mb] = unknownIds.length
+    ? await Promise.all([fetchWikidataArtistMeta(unknownIds), fetchMusicBrainzArtistMeta(unknownIds)])
+    : [{ metaById: new Map() }, { metaById: new Map() }];
   if (wd.error) diagnostics.warnings.push(`Wikidata lookup failed (${wd.error}).`);
   if (mb.error) diagnostics.warnings.push(`MusicBrainz lookup failed (${mb.error}).`);
 
-  const genreSource = { spotify: 0, enriched: 0, none: 0 };
+  const lastfmBudget = Math.max(MIN_LASTFM_BUDGET_MS, METADATA_BUDGET_MS - (Date.now() - metaStart));
+  const lastfmQueue = unknown
+    .slice()
+    .sort((x, y) => (artistScore.get(y.id) || 0) - (artistScore.get(x.id) || 0))
+    .map(a => ({ id: a.id, name: a.name, mbid: mb.metaById.get(a.id)?.mbid }));
+  const lf = await fetchLastfmTags(lastfmQueue, lastfmBudget);
+  if (lf.error) diagnostics.warnings.push(`${lf.error}; the rest will be looked up on the next load.`);
+  diagnostics.lastfm = isLastfmConfigured() ? { looked: lf.looked, pending: lf.skipped } : 'LASTFM_API_KEY not set';
+
+  const genreSource = { spotify: 0, remembered: 0, enriched: 0, none: 0 };
   const artistGenres = new Map();
   const artistFeatures = new Map();
+  const artistMeta = {};
+  const now = Date.now();
   includedArtists.forEach(a => {
-    const w = wd.metaById.get(a.id) || { genres: [], countries: [], occupations: [] };
-    const m = mb.metaById.get(a.id) || { country: null, area: null, tags: [] };
-    let raw = a.genres || [];
-    if (raw.length) genreSource.spotify++;
-    else if ((raw = [...w.genres, ...m.tags]).length) genreSource.enriched++;
-    else genreSource.none++;
-    const genres = [...new Set(raw.map(normalizeGenre))];
-    const implied = w.occupations.map(o => OCCUPATION_GENRES[o.toLowerCase()]).filter(Boolean);
-    const countries = m.country ? [m.country] : (w.countries.length ? w.countries : (m.area ? [m.area] : []));
+    let genres;
+    let countries;
+    const known = knownMeta[a.id];
+    if ((a.genres || []).length) {
+      genreSource.spotify++;
+      genres = [...new Set(a.genres.map(normalizeGenre))];
+      countries = isFresh(known) ? cleanList(known.c, 4) : [];
+    } else if (isFresh(known)) {
+      genreSource.remembered++;
+      genres = cleanList(known.g, MAX_GENRES_PER_ARTIST);
+      countries = cleanList(known.c, 4);
+    } else {
+      const w = wd.metaById.get(a.id) || { genres: [], countries: [], occupations: [] };
+      const m = mb.metaById.get(a.id) || { country: null, area: null, tags: [] };
+      const lfTags = lf.tagsById.get(a.id) || [];
+      const raw = [...w.genres, ...lfTags, ...(w.genres.length || lfTags.length ? [] : m.tags)];
+      const implied = w.occupations.map(o => OCCUPATION_GENRES[o.toLowerCase()]).filter(Boolean);
+      genres = [...new Set([...raw, ...implied].map(normalizeGenre))].slice(0, MAX_GENRES_PER_ARTIST);
+      countries = m.country ? [m.country] : (w.countries.length ? w.countries : (m.area ? [m.area] : []));
+      if (genres.length) genreSource.enriched++;
+      else genreSource.none++;
+      // Remember it unless Last.fm still owes us a lookup for this artist.
+      const lastfmPending = isLastfmConfigured() && !lf.tagsById.has(a.id);
+      if (!lastfmPending || w.genres.length) artistMeta[a.id] = { g: genres, c: countries, t: now };
+    }
     artistGenres.set(a.id, genres);
-    artistFeatures.set(a.id, { genres: [...new Set([...genres, ...implied])], countries });
+    artistFeatures.set(a.id, { genres, countries });
   });
   diagnostics.genreSource = genreSource;
+  diagnostics.metadataMs = Date.now() - metaStart;
 
   // 4. Cluster artists into suns (genre similarity + collaborations).
   const includedIdSet = new Set(includedArtists.map(a => a.id));
@@ -221,7 +269,7 @@ export async function buildUniverseDataset(api) {
 
   diagnostics.artists = artists.length;
   diagnostics.genres = genres.length;
-  if (genreSource.none > artists.length / 2 && !wd.error && !mb.error) {
+  if (genreSource.none > artists.length / 2 && !wd.error && !mb.error && !lf.skipped) {
     diagnostics.warnings.push(`No genre data found for ${genreSource.none} of ${artists.length} artists; they are grouped by collaborations or placed in Uncharted.`);
   }
 
@@ -255,6 +303,7 @@ export async function buildUniverseDataset(api) {
       artists,
       tracks
     },
+    artistMeta,
     diagnostics
   };
 }

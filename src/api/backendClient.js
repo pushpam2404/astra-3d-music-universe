@@ -25,9 +25,16 @@ export async function getAuthStatus() {
   }
 }
 
-/** Resolves to { dataset, diagnostics }; dataset is null when Spotify has no data yet. */
-export function fetchUniverse() {
-  return requestJson('/api/universe');
+/**
+ * Resolves to { dataset, artistMeta, diagnostics }; dataset is null when Spotify has no
+ * data yet. knownMeta is what earlier loads learned (see artistMetaCache.js).
+ */
+export function fetchUniverse(knownMeta = {}) {
+  return requestJson('/api/universe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ knownMeta })
+  });
 }
 
 export function logout() {

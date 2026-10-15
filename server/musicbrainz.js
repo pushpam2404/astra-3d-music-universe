@@ -6,31 +6,14 @@
  * MusicBrainz allows ~1 request/second per client, hence the pause between the two.
  */
 
+import { usefulTags } from './tagFilter.js';
+
 const MB_BASE = 'https://musicbrainz.org/ws/2';
 const USER_AGENT = 'ASTRA-music-universe/1.0 ( https://astra-3d-music-universe.vercel.app )';
 const TIMEOUT_MS = 30000;
 // MusicBrainz accepts up to 100 URL resources per lookup.
 const CHUNK_SIZE = 100;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_TAGS = 5;
-
-// Community tags that describe the database, not the music.
-const JUNK_TAG = /artist credit|seen live|favou?rites?|spotify|wikidata|discogs|^[a-z]{1,2}$|\d{4}/i;
-const squash = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-function usefulTags(tags, artistName) {
-  const name = squash(artistName);
-  return (tags || [])
-    .filter(t => t.count > 0 && !JUNK_TAG.test(t.name))
-    // Tags that are just the artist's own name (often misspelled).
-    .filter(t => {
-      const tag = squash(t.name);
-      return !(tag.length > 3 && (name.includes(tag) || tag.includes(name) || tag.slice(0, 5) === name.slice(0, 5)));
-    })
-    .sort((x, y) => y.count - x.count)
-    .slice(0, MAX_TAGS)
-    .map(t => t.name);
-}
 
 const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
 const cache = new Map();
@@ -80,6 +63,7 @@ async function queryMusicBrainz(spotifyIds, signal) {
       country = null;
     }
     out.set(spotifyId, {
+      mbid: a.id,
       country,
       area: a.area?.name || null,
       tags: usefulTags(a.tags, a.name)
@@ -89,7 +73,7 @@ async function queryMusicBrainz(spotifyIds, signal) {
 }
 
 /**
- * Returns { metaById: Map<spotifyId, { country, area, tags }>, error?: string }. Never throws.
+ * Returns { metaById: Map<spotifyId, { mbid, country, area, tags }>, error?: string }. Never throws.
  */
 export async function fetchMusicBrainzArtistMeta(spotifyIds) {
   const metaById = new Map();

@@ -124,7 +124,7 @@ export function describeClusters(clusters, uncharted, byId, n) {
         const lift = support / (genreDf.get(g) / n);
         return { g, support, score: support * Math.log(1 + lift) * (BROAD_GENRES.has(g) ? 0.45 : 1) };
       })
-      .sort((x, y) => y.score - x.score);
+      .sort((x, y) => y.score - x.score || x.g.localeCompare(y.g));
 
     const primary = ranked[0]?.g;
     const secondary = ranked.slice(1).find(r => r.support >= 0.18 && !overlaps(r.g, primary))?.g;

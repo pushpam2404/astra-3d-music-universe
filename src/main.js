@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { GALAXY_PRESETS } from './config/presets.js';
 import { buildUniverseGraph } from './etl/graphNormalizer.js';
 import { getAuthStatus, fetchUniverse } from './api/backendClient.js';
+import { loadArtistMeta, saveArtistMeta } from './api/artistMetaCache.js';
 import { collideGalaxies } from './etl/galaxyCollider.js';
 import { TemporalUniverseScrubber } from './etl/timeMachine4D.js';
 import { createUniverseScene } from './renderer/universeScene.js';
@@ -297,7 +298,8 @@ async function initApp() {
     if (titleEl) titleEl.textContent = 'Charting your universe…';
     showNotice('Reading your top charts, recent plays and Liked Songs, then mapping every artist into clusters.', false);
     try {
-      const { dataset, diagnostics } = await fetchUniverse();
+      const { dataset, artistMeta, diagnostics } = await fetchUniverse(loadArtistMeta());
+      saveArtistMeta(artistMeta);
       console.info('[ASTRA] Spotify universe diagnostics:', diagnostics);
       if (!dataset) {
         if (titleEl) titleEl.textContent = 'Nothing to chart yet';
@@ -308,6 +310,9 @@ async function initApp() {
       loadDataset(dataset);
       cameraController.resetOverview();
       const notes = [...diagnostics.warnings];
+      if (diagnostics.lastfm?.pending) {
+        notes.push(`Genres for ${diagnostics.lastfm.pending} more artists will be filled in on your next visit.`);
+      }
       if (authStatus.missingScopes?.includes('user-library-read')) {
         notes.push('Reconnect Spotify (top right) to add your Liked Songs to the universe.');
       }

@@ -54,12 +54,17 @@ apiRouter.post('/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-apiRouter.get('/universe', async (req, res) => {
+// POST carries the artist metadata the browser already learned (its persistent cache).
+apiRouter.post('/universe', express.json({ limit: '2mb' }), universeHandler);
+apiRouter.get('/universe', universeHandler);
+
+async function universeHandler(req, res) {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Not connected to Spotify.' });
 
+  const knownMeta = req.body && typeof req.body.knownMeta === 'object' ? req.body.knownMeta : {};
   try {
-    const result = await buildUniverseDataset(createApi(session, (s) => saveSession(req, res, s)));
+    const result = await buildUniverseDataset(createApi(session, (s) => saveSession(req, res, s)), { knownMeta });
     console.log('[universe]', JSON.stringify(result.diagnostics));
     res.json(result);
   } catch (err) {
@@ -80,4 +85,4 @@ apiRouter.get('/universe', async (req, res) => {
     }
     res.status(500).json({ error: 'Failed to build universe.' });
   }
-});
+}
