@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { GALAXY_PRESETS } from './config/presets.js';
 import { buildUniverseGraph } from './etl/graphNormalizer.js';
-import { getAuthStatus, fetchUniverse } from './api/backendClient.js';
+import { getAuthStatus, fetchUniverse, enrichArtists } from './api/backendClient.js';
 import { loadArtistMeta, saveArtistMeta } from './api/artistMetaCache.js';
 import { createUniverseScene } from './renderer/universeScene.js';
 import { initPostProcessing, BLOOM_STRENGTH } from './renderer/postProcessing.js';
@@ -25,6 +25,7 @@ const AppState = {
   selectedNode: null
 };
 
+const ENRICH_BATCH = 40;
 const plural = (n, one, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 async function initApp() {
@@ -128,7 +129,10 @@ async function initApp() {
     raycaster.setFromCamera(pointer, camera);
     const meshes = [];
     AppState.nodes.forEach(n => { if (n.sphereMesh && n.meshGroup?.visible) meshes.push(n.sphereMesh); });
-    if (factory.trackMesh && AppState.layers.tracks) meshes.push(factory.trackMesh);
+    if (factory.artistMesh && AppState.layers.artists) meshes.push(factory.artistMesh);
+    // Moons are only pickable once something is selected: testing thousands of them on
+    // every hover isn't worth it, and moons only matter up close.
+    if (factory.trackMesh && AppState.layers.tracks && AppState.selectedNode) meshes.push(factory.trackMesh);
     const hit = raycaster.intersectObjects(meshes, false)[0];
     return hit ? factory.nodeFromHit(hit) : null;
   }
@@ -151,10 +155,8 @@ async function initApp() {
     layout.initializeNodePositions(AppState.nodes);
     cameraController.setSceneRadius(layout.boundingRadius);
 
-    AppState.nodes.forEach(node => {
-      if (node.type === 'genre') factory.buildGenreSun(node);
-      else if (node.type === 'artist') factory.buildArtistPlanet(node);
-    });
+    AppState.nodes.forEach(node => { if (node.type === 'genre') factory.buildGenreSun(node); });
+    factory.buildArtistPlanets(AppState.nodes.filter(n => n.type === 'artist'));
     factory.buildTrackSatellites(AppState.nodes.filter(n => n.type === 'track'));
     const edgeData = factory.buildEdgeVisuals(AppState.edges);
     edgeGroup = edgeData.edgeLinesGroup;
@@ -174,6 +176,7 @@ async function initApp() {
     const show = { genre: AppState.layers.genres, artist: AppState.layers.artists, track: AppState.layers.tracks };
     AppState.nodes.forEach(n => { if (n.meshGroup) n.meshGroup.visible = show[n.type]; });
     if (factory.trackMesh) factory.trackMesh.visible = AppState.layers.tracks;
+    if (factory.artistMesh) factory.artistMesh.visible = factory.artistDecor.visible = AppState.layers.artists;
     if (edgeGroup) edgeGroup.visible = AppState.layers.edges;
   }
 
@@ -201,11 +204,10 @@ async function initApp() {
 
       if (authStatus.missingScopes?.includes('user-library-read')) {
         hud.setNotice('Your Liked Songs aren’t included yet.', { label: 'Reconnect Spotify', run: () => document.getElementById('spotify-btn').click() });
-      } else if (diagnostics.lastfm?.pending) {
-        hud.setNotice(`Genres for ${plural(diagnostics.lastfm.pending, 'artist')} are still being looked up; they’ll appear on your next visit.`);
       } else {
         hud.setNotice(null);
       }
+      if (diagnostics.pendingArtists?.length) enrichInBackground(diagnostics.pendingArtists);
     } catch (err) {
       console.error('Failed to load Spotify universe:', err);
       loadDemo();
@@ -216,6 +218,35 @@ async function initApp() {
       hud.setNotice(err.message, err.status === 401 ? null : { label: 'Try again', run: loadLive });
     } finally {
       hud.setLoading(false);
+    }
+  }
+
+  /**
+   * Looks up genres for the artists the load didn't get to, a batch at a time, while
+   * the page is open. Progress is saved in the browser, so closing the tab loses
+   * nothing; "Update map" re-arranges the universe with what was learned.
+   */
+  let enrichRun = 0;
+  async function enrichInBackground(pending) {
+    const run = ++enrichRun;
+    const total = pending.length;
+    let finished = 0;
+    const updateAction = { label: 'Update map', run: () => { enrichRun++; loadLive(); } };
+    for (let i = 0; i < pending.length && run === enrichRun; i += ENRICH_BATCH) {
+      if (!authStatus.missingScopes?.length) {
+        hud.setNotice(`Looking up genres in the background: ${plural(finished, 'artist')} of ${total.toLocaleString()} done.`, finished ? updateAction : null);
+      }
+      try {
+        const { artistMeta } = await enrichArtists(pending.slice(i, i + ENRICH_BATCH));
+        saveArtistMeta(artistMeta);
+        finished += Object.keys(artistMeta).length;
+      } catch (err) {
+        console.warn('Background genre lookup stopped:', err);
+        break;
+      }
+    }
+    if (run === enrichRun && finished && !authStatus.missingScopes?.length) {
+      hud.setNotice(`Found genres for ${plural(finished, 'more artist')}.`, updateAction);
     }
   }
 
@@ -238,6 +269,7 @@ async function initApp() {
     lastTime = now;
 
     layout.step(AppState.nodes, delta);
+    factory.updateArtistInstances();
     factory.updateTrackInstances();
     factory.updateEdgeGeometry(AppState.edges);
     factory.updatePulses(AppState.pulseParticles, layout.orbitMultiplier);

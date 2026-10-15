@@ -37,6 +37,15 @@ export function fetchUniverse(knownMeta = {}) {
   });
 }
 
+/** Looks up genres for up to 50 artists; resolves to { artistMeta, warnings }. */
+export function enrichArtists(artists) {
+  return requestJson('/api/enrich', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ artists })
+  });
+}
+
 export function logout() {
   return requestJson('/api/auth/logout', { method: 'POST' });
 }

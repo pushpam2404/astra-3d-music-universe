@@ -5,6 +5,7 @@ import { isSpotifyConfigured, getRedirectUri, REQUIRED_SCOPES } from './config.j
 import { getSession, saveSession, destroySession, parseCookies, setCookie } from './sessions.js';
 import { buildAuthorizeUrl, exchangeCode, createApi, SpotifyError } from './spotify.js';
 import { buildUniverseDataset } from './universeBuilder.js';
+import { enrichArtists, toCacheEntry } from './enrich.js';
 
 const STATE_COOKIE = 'astra_oauth_state';
 
@@ -52,6 +53,22 @@ apiRouter.get('/auth/callback', async (req, res) => {
 apiRouter.post('/auth/logout', (req, res) => {
   destroySession(req, res);
   res.json({ ok: true });
+});
+
+// Background genre lookups for artists the universe load didn't get to. Small batches,
+// so each call stays well inside serverless time limits.
+const ENRICH_BATCH_MAX = 50;
+const ENRICH_BUDGET_MS = 15000;
+apiRouter.post('/enrich', express.json({ limit: '200kb' }), async (req, res) => {
+  if (!getSession(req)) return res.status(401).json({ error: 'Not connected to Spotify.' });
+  const artists = (Array.isArray(req.body?.artists) ? req.body.artists : [])
+    .filter(a => a && typeof a.id === 'string' && typeof a.name === 'string')
+    .slice(0, ENRICH_BATCH_MAX)
+    .map(a => ({ id: a.id.slice(0, 64), name: a.name.slice(0, 200), track: typeof a.track === 'string' ? a.track.slice(0, 200) : undefined }));
+  const result = await enrichArtists(artists, ENRICH_BUDGET_MS);
+  const artistMeta = {};
+  result.done.forEach(id => { artistMeta[id] = toCacheEntry(result.meta.get(id)); });
+  res.json({ artistMeta, warnings: result.warnings });
 });
 
 // POST carries the artist metadata the browser already learned (its persistent cache).

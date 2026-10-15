@@ -19,18 +19,19 @@ export class LabelProjector {
     this.container = containerEl;
     this.labelPool = new Map();
     this.placed = [];
+    this.shown = new Set();
   }
 
   syncLabels(nodes, onLabelClick) {
     this.container.innerHTML = '';
     this.labelPool.clear();
     this.onLabelClick = onLabelClick;
-    // Track labels are created lazily: a big library has thousands of them and only a
-    // focused artist's moons are ever shown.
+    this.shown = new Set();
+    // Labels are created lazily, the first time a node is a label candidate: a big
+    // library has thousands of artists and songs, and only a few dozen are ever named.
     nodes.forEach(node => {
       node.labelEl = null;
       node.labelSize = null;
-      if (node.type !== 'track') this.ensureLabel(node);
     });
   }
 
@@ -115,18 +116,12 @@ export class LabelProjector {
 
     for (const node of nodes) {
       const priority = (node.meshGroup && !node.meshGroup.visible) ? -1 : this.priorityOf(node, activeNode);
-      if (priority < 0) {
-        this.hide(this.labelPool.get(node.id));
-        continue;
-      }
+      if (priority < 0) continue;
 
       tempProjVec.copy(node.position);
       tempProjVec.y += (node.currentRadius || node.baseRadius || 5) * scaleMultiplier + 1.5;
       tempProjVec.project(camera);
-      if (tempProjVec.z > 1 || tempProjVec.z < -1 || Math.abs(tempProjVec.x) > 1.1 || Math.abs(tempProjVec.y) > 1.1) {
-        this.hide(this.labelPool.get(node.id));
-        continue;
-      }
+      if (tempProjVec.z > 1 || tempProjVec.z < -1 || Math.abs(tempProjVec.x) > 1.1 || Math.abs(tempProjVec.y) > 1.1) continue;
 
       candidates.push({
         node, el: this.ensureLabel(node), priority,
@@ -139,6 +134,7 @@ export class LabelProjector {
     // Highest priority first; among equals, nearer to the camera first.
     candidates.sort((a, b) => a.priority - b.priority || a.depth - b.depth);
     this.placed.length = 0;
+    const shownNow = new Set();
 
     for (const c of candidates) {
       if (!c.node.labelSize) {
@@ -159,10 +155,7 @@ export class LabelProjector {
           break;
         }
       }
-      if (!placedAt) {
-        this.hide(c.el);
-        continue;
-      }
+      if (!placedAt) continue;
       this.placed.push(placedAt.rect);
       c.x = placedAt.x;
       c.y = placedAt.y;
@@ -170,6 +163,10 @@ export class LabelProjector {
       const focused = activeNode && (c.priority <= 2);
       const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.8'));
       this.show(c.el, `translate(-50%, -100%) translate3d(${c.x.toFixed(0)}px, ${c.y.toFixed(0)}px, 0)`, opacity, c.priority === 0);
+      shownNow.add(c.el);
     }
+    // Hide only what was shown last frame and isn't now (no per-node DOM work).
+    this.shown.forEach(el => { if (!shownNow.has(el)) this.hide(el); });
+    this.shown = shownNow;
   }
 }

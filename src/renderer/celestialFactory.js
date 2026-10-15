@@ -1,7 +1,7 @@
 // src/renderer/celestialFactory.js
 import * as THREE from 'three';
 import { createSolarShaderMaterial } from './shaders/solarPlasmaShader.js';
-import { createFresnelPlanetMaterial } from './shaders/fresnelPlanetShader.js';
+import { createPlanetMaterial } from './shaders/planetShader.js';
 import { COLOR_SPOTIFY_GREEN } from '../config/constants.js';
 
 const glowTextureCache = new Map();
@@ -13,6 +13,8 @@ const FOCUS_LERP = 0.12;
 const SUN_LIGHT_INTENSITY = 1.2;
 const NEBULA_OPACITY = 0.16;
 const MAX_PULSES = 400;
+// Only the most-played artists get an individual glow halo (each halo is a draw call).
+const HALO_LIMIT = 300;
 
 const EDGE_STYLE = {
   artist_genre: { opacity: 0.09, focused: 0.55 },
@@ -190,36 +192,82 @@ export class CelestialFactory {
     return group;
   }
 
-  buildArtistPlanet(node) {
-    const group = new THREE.Group();
-    group.position.copy(node.position);
+  /**
+   * All artists share one InstancedMesh (thousands of artists would otherwise be
+   * thousands of draw calls). Like tracks, each artist's `meshGroup` is a lightweight
+   * handle. Glow halos are individual sprites, but only for the most-played artists.
+   */
+  buildArtistPlanets(artistNodes) {
+    const n = Math.max(1, artistNodes.length);
+    const geometry = new THREE.SphereGeometry(1, 24, 18);
+    const info = new Float32Array(n * 3);
+    const mesh = new THREE.InstancedMesh(geometry, createPlanetMaterial(), n);
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
 
-    const seed = (parseInt(String(node.id).slice(-6), 36) % 997) / 997 || 0.3;
-    const listen = node.normScore ?? 1;
-    const planetMat = createFresnelPlanetMaterial(node.color, node.valence ?? 0.6, seed, listen);
-    const sphereMesh = new THREE.Mesh(new THREE.SphereGeometry(node.baseRadius, 32, 32), planetMat);
-    sphereMesh.userData = { node };
-    group.add(sphereMesh);
-    this.register(node, planetMat, 1.0, true);
+    const decor = new THREE.Group();
+    const byListening = artistNodes.slice().sort((a, b) => (b.normScore ?? 0) - (a.normScore ?? 0));
+    const haloSet = new Set(byListening.slice(0, HALO_LIMIT));
 
-    // Halo strength follows listening too: favourites glow, the long tail barely does.
-    const haloOpacity = 0.05 + 0.25 * listen * listen;
-    const glow = makeSprite(getProceduralGlowTexture(node.color), node.baseRadius * 3.0, haloOpacity);
-    group.add(glow);
-    this.register(node, glow.material, haloOpacity, false, true);
+    artistNodes.forEach((node, i) => {
+      const listen = node.normScore ?? 1;
+      node.artistIndex = i;
+      node.meshGroup = { position: new THREE.Vector3(), scale: new THREE.Vector3(1, 1, 1), visible: true, isInstanceHandle: true };
+      mesh.setColorAt(i, new THREE.Color(node.color));
+      info[i * 3] = listen;
+      info[i * 3 + 1] = 1;
+      info[i * 3 + 2] = (parseInt(String(node.id).slice(-6), 36) % 997) / 997 || 0.3;
 
-    // Ring marks each cluster's headline artist.
-    if (node.labelRank === 0 && !node.isBridge) {
-      const ring = createRing(node.baseRadius * 1.45, node.baseRadius * 1.95, node.color, 0.32);
-      group.add(ring);
-      this.register(node, ring.material, 0.32);
+      node.decor = [];
+      if (haloSet.has(node)) {
+        // Halo strength follows listening: favourites glow, the long tail barely does.
+        const haloOpacity = 0.05 + 0.25 * listen * listen;
+        const glow = makeSprite(getProceduralGlowTexture(node.color), node.baseRadius * 3.0, haloOpacity);
+        glow.userData.size = 3.0;
+        decor.add(glow);
+        node.decor.push(glow);
+        this.register(node, glow.material, haloOpacity, false, true);
+      }
+      // A ring marks each cluster's headline artist.
+      if (node.labelRank === 0 && !node.isBridge) {
+        const ring = createRing(1.45, 1.95, node.color, 0.32);
+        ring.userData.size = 1;
+        decor.add(ring);
+        node.decor.push(ring);
+        this.register(node, ring.material, 0.32);
+      }
+    });
+    geometry.setAttribute('aInfo', new THREE.InstancedBufferAttribute(info, 3));
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+
+    this.artistMesh = mesh;
+    this.artistNodes = artistNodes;
+    this.artistInfo = geometry.getAttribute('aInfo');
+    this.artistDecor = decor;
+    this.scene.add(mesh, decor);
+  }
+
+  /** Writes artist handles into instance matrices and moves their halos/rings (per frame). */
+  updateArtistInstances() {
+    if (!this.artistMesh) return;
+    const m = this._am || (this._am = new THREE.Matrix4());
+    const q = this._aq || (this._aq = new THREE.Quaternion());
+    const sc = this._as || (this._as = new THREE.Vector3());
+    for (const node of this.artistNodes) {
+      const h = node.meshGroup;
+      const r = h.visible ? node.baseRadius : 0;
+      sc.copy(h.scale).multiplyScalar(r);
+      m.compose(h.position, q, sc);
+      this.artistMesh.setMatrixAt(node.artistIndex, m);
+      for (const d of node.decor) {
+        d.visible = h.visible;
+        d.position.copy(h.position);
+        const s = node.baseRadius * h.scale.x * d.userData.size;
+        if (d.isSprite) d.scale.set(s, s, 1);
+        else d.scale.setScalar(s);
+      }
     }
-
-    node.meshGroup = group;
-    node.sphereMesh = sphereMesh;
-    node.sprite = glow;
-    this.scene.add(group);
-    return group;
+    this.artistMesh.instanceMatrix.needsUpdate = true;
   }
 
   /**
@@ -272,18 +320,24 @@ export class CelestialFactory {
   /** Resolves a raycast hit (planet/sun mesh or a track instance) to its node. */
   nodeFromHit(hit) {
     if (hit.object === this.trackMesh) return this.trackNodes[hit.instanceId] || null;
+    if (hit.object === this.artistMesh) return this.artistNodes[hit.instanceId] || null;
     return hit.object.userData.node || null;
   }
 
   disposeBatches() {
-    [this.trackMesh, this.edgeLines, this.pulseMesh].forEach(obj => {
+    [this.trackMesh, this.artistMesh, this.edgeLines, this.pulseMesh].forEach(obj => {
       if (!obj) return;
       this.scene.remove(obj);
       obj.geometry.dispose();
       obj.material.dispose();
     });
-    this.trackMesh = this.edgeLines = this.pulseMesh = null;
+    if (this.artistDecor) {
+      this.scene.remove(this.artistDecor);
+      this.artistDecor.children.forEach(d => { d.geometry?.dispose(); d.material.dispose(); });
+    }
+    this.trackMesh = this.artistMesh = this.edgeLines = this.pulseMesh = this.artistDecor = null;
     this.trackNodes = [];
+    this.artistNodes = [];
   }
 
   /**
@@ -414,6 +468,7 @@ export class CelestialFactory {
     }
 
     let trackColorsDirty = false;
+    let artistInfoDirty = false;
     const tmpColor = this._fc || (this._fc = new THREE.Color());
     for (const n of nodes) {
       if (n.focusLevel === undefined) n.focusLevel = 1;
@@ -425,8 +480,13 @@ export class CelestialFactory {
         trackColorsDirty = true;
       }
       this.applyFade(n);
+      if (n.artistIndex !== undefined && this.artistInfo) {
+        this.artistInfo.array[n.artistIndex * 3 + 1] = n.focusLevel;
+        artistInfoDirty = true;
+      }
     }
     if (trackColorsDirty) this.trackMesh.instanceColor.needsUpdate = true;
+    if (artistInfoDirty) this.artistInfo.needsUpdate = true;
 
     if (!this.edgeLines) return;
     const colors = this.edgeLines.geometry.attributes.color;
