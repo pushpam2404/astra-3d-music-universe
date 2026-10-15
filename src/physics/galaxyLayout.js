@@ -11,10 +11,17 @@
  *  - Bridge artists (strong ties to two clusters) float between both clouds.
  *  - Tracks orbit their artist as moons on inclined orbits.
  *
+ * A second arrangement, "similarity", places every artist by the server's UMAP
+ * embedding (`artist.embed`), so distance means how alike two artists are, inside
+ * clusters too; each sun sits at its members' centroid. Both arrangements are
+ * computed up front and `setMode` glides between them.
+ *
  * Artist positions are static; only moons move (the camera slowly orbits instead).
  */
 import * as THREE from 'three';
 import { LAYOUT_CONFIG } from '../config/constants.js';
+
+const TRANSITION_MS = 1400;
 
 function hash01(str) {
   let h = 2166136261;
@@ -66,6 +73,19 @@ export class GalaxyLayoutEngine {
     this.nodeScaleMultiplier = 1.0;
     this.time = 0;
     this.boundingRadius = 200;
+    this.mode = 'similarity'; // 'similarity' | 'clusters'
+    this.hasSimilarity = false;
+    this.transition = null; // { from, start }
+    this.bounds = { clusters: 200, similarity: 200 };
+  }
+
+  /** Switches arrangement; positions glide over TRANSITION_MS. Returns the new bounding radius. */
+  setMode(mode, nodes) {
+    const next = mode === 'similarity' && this.hasSimilarity ? 'similarity' : 'clusters';
+    if (next !== this.mode && nodes?.length) this.transition = { from: this.mode, start: performance.now() };
+    this.mode = next;
+    this.boundingRadius = this.bounds[next];
+    return this.boundingRadius;
   }
 
   initializeNodePositions(nodes) {
@@ -146,7 +166,7 @@ export class GalaxyLayoutEngine {
       s.position.copy(s.anchor);
       bounding = Math.max(bounding, R + s.clusterRadius);
     });
-    this.boundingRadius = Math.max(80, bounding);
+    this.bounds.clusters = Math.max(80, bounding);
 
     // Bridges: between their two suns, nearer the one they belong to more, fanned out
     // around the link so several bridges between the same pair don't stack.
@@ -191,8 +211,75 @@ export class GalaxyLayoutEngine {
       });
     });
 
+    // Cluster-cloud positions (static).
+    suns.forEach(sun => {
+      sun.layoutPos = { clusters: sun.anchor.clone() };
+      sun.layoutRadius = { clusters: sun.clusterRadius };
+    });
+    artists.forEach(a => {
+      const sun = sunById.get(a.primarySunId);
+      const p = a.isBridge && a.bridgeAnchor ? a.bridgeAnchor.clone()
+        : (sun && a.cloudOffset ? sun.anchor.clone().add(a.cloudOffset) : new THREE.Vector3());
+      a.layoutPos = { clusters: p };
+    });
+
+    this.computeSimilarityPositions(suns, artists, sunById);
+    this.transition = null;
+    this.setMode(this.mode);
+
     this.time = 0;
     this.applyPositions(nodes);
+  }
+
+  /**
+   * Similarity arrangement from the server's embedding. Scaled so the typical gap to the
+   * nearest neighbour matches the cluster view's spacing; suns sit at their members'
+   * centroid. Skipped when most artists have no embedding (e.g. the demo).
+   */
+  computeSimilarityPositions(suns, artists, sunById) {
+    const C = LAYOUT_CONFIG;
+    const withEmbed = artists.filter(a => Array.isArray(a.embed) && a.embed.length === 3);
+    this.hasSimilarity = artists.length >= 8 && withEmbed.length >= artists.length * 0.9;
+    if (!this.hasSimilarity) return;
+
+    const pts = withEmbed.map(a => new THREE.Vector3(...a.embed));
+    let nnSum = 0;
+    pts.forEach((p, i) => {
+      let best = Infinity;
+      pts.forEach((q, j) => { if (i !== j) best = Math.min(best, p.distanceToSquared(q)); });
+      nnSum += Math.sqrt(best);
+    });
+    const meanNN = nnSum / pts.length || 1;
+    const meanSystem = artists.reduce((s, a) => s + a.systemRadius, 0) / artists.length;
+    const scale = Math.max(C.cloudSpacing * 1.2, meanSystem * 1.6) / meanNN;
+
+    withEmbed.forEach((a, i) => { a.layoutPos.similarity = pts[i].multiplyScalar(scale); });
+
+    const centroid = new Map(suns.map(s => [s.id, { sum: new THREE.Vector3(), list: [] }]));
+    withEmbed.forEach(a => {
+      const c = centroid.get(a.primarySunId);
+      if (c) {
+        c.sum.add(a.layoutPos.similarity);
+        c.list.push(a.layoutPos.similarity);
+      }
+    });
+    let bounding = 0;
+    suns.forEach(sun => {
+      const c = centroid.get(sun.id);
+      const center = c.list.length ? c.sum.divideScalar(c.list.length) : new THREE.Vector3();
+      const dists = c.list.map(p => p.distanceTo(center)).sort((x, y) => x - y);
+      sun.layoutPos.similarity = center;
+      sun.layoutRadius.similarity = Math.max(sun.baseRadius * 3, dists[Math.floor(dists.length * 0.85)] || 0);
+    });
+    // Artists without an embedding stay near their sun.
+    artists.forEach(a => {
+      if (!a.layoutPos.similarity) {
+        const sun = sunById.get(a.primarySunId);
+        a.layoutPos.similarity = (sun?.layoutPos.similarity || new THREE.Vector3()).clone().add(directionFor(a.id).multiplyScalar(sun?.baseRadius * 3 || 10));
+      }
+      bounding = Math.max(bounding, a.layoutPos.similarity.length() + a.systemRadius);
+    });
+    this.bounds.similarity = Math.max(80, bounding);
   }
 
   step(nodes, delta = 16) {
@@ -203,24 +290,29 @@ export class GalaxyLayoutEngine {
   applyPositions(nodes) {
     const t = this.time;
     const scale = this.nodeScaleMultiplier;
-
-    // Suns first, then artists (depend on suns), then tracks (depend on artists).
-    for (const n of nodes) {
-      if (n.type !== 'genre' || !n.anchor) continue;
-      n.position.copy(n.anchor);
-      if (n.meshGroup) n.meshGroup.position.copy(n.position);
+    const mode = this.mode;
+    let blend = 1;
+    if (this.transition) {
+      const p = Math.min(1, (performance.now() - this.transition.start) / TRANSITION_MS);
+      blend = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; // easeInOutCubic
+      if (p >= 1) this.transition = null;
     }
+    const from = this.transition?.from;
 
+    // Suns and artists: their arrangement's position (gliding during a switch).
     for (const n of nodes) {
-      if (n.type !== 'artist') continue;
-      if (n.isBridge && n.bridgeAnchor) {
-        n.position.copy(n.bridgeAnchor);
-      } else {
-        const s = this._sunOf(n, nodes);
-        if (!s || !n.cloudOffset) continue;
-        // Gentle breathing so the cloud feels alive without anything drifting off.
-        const breathe = 1 + Math.sin(t * 0.5 + n.labelRank * 0.7) * 0.012;
-        n.position.copy(s.position).addScaledVector(n.cloudOffset, (0.85 + 0.15 * scale) * breathe);
+      if (n.type === 'track' || !n.layoutPos) continue;
+      const target = n.layoutPos[mode] || n.layoutPos.clusters;
+      if (from) n.position.lerpVectors(n.layoutPos[from] || target, target, blend);
+      else n.position.copy(target);
+      if (n.type === 'genre') {
+        const rTo = n.layoutRadius[mode] || n.layoutRadius.clusters;
+        const rFrom = from ? (n.layoutRadius[from] || rTo) : rTo;
+        n.currentClusterRadius = rFrom + (rTo - rFrom) * blend;
+      } else if (scale !== 1 && n.type === 'artist' && !n.isBridge) {
+        // Planet size slider also loosens the arrangement a little around each sun.
+        const sun = n._sun || (n._sun = nodes.find(x => x.id === n.primarySunId));
+        if (sun) n.position.sub(sun.position).multiplyScalar(0.85 + 0.15 * scale).add(sun.position);
       }
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }
@@ -239,11 +331,5 @@ export class GalaxyLayoutEngine {
       n.position.set(p.x + lx * cn - lz * sn, p.y + ly, p.z + lx * sn + lz * cn);
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }
-  }
-
-  _sunOf(artist, nodes) {
-    if (artist._sun && artist._sun.id === artist.primarySunId) return artist._sun;
-    artist._sun = nodes.find(n => n.id === artist.primarySunId) || null;
-    return artist._sun;
   }
 }

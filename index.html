@@ -35,6 +35,11 @@
 
   <!-- View settings popover -->
   <section id="view-panel" class="panel" hidden aria-label="View settings">
+    <fieldset id="arrange-fieldset">
+      <legend>Arrange by</legend>
+      <label><input type="radio" name="arrange" value="similarity" checked> Similarity <span class="option-hint">distance = how alike</span></label>
+      <label><input type="radio" name="arrange" value="clusters"> Clusters <span class="option-hint">tidy clouds, top artists at the core</span></label>
+    </fieldset>
     <fieldset>
       <legend>Show</legend>
       <label><input type="checkbox" id="toggle-genres" checked> Clusters</label>

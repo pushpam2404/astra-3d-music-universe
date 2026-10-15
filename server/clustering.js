@@ -13,6 +13,7 @@
  */
 import Graph from 'graphology';
 import louvain from 'graphology-communities-louvain';
+import { UMAP } from 'umap-js';
 import { familyVector, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
 import { describeClusters } from './clusterNaming.js';
 
@@ -51,6 +52,42 @@ function famCosine(a, b) {
   return na && nb ? cosine(a, b) / (na * nb) : 0;
 }
 
+const EMBED_NEIGHBORS = 15;
+// How strongly cluster membership pulls the embedding together (0 = pure similarity).
+const EMBED_CLUSTER_WEIGHT = 0.35;
+
+/**
+ * UMAP on the artist similarity matrix → 3D coordinates where nearby means similar.
+ * Neighbours are taken straight from the similarity scores (distance = 1 − similarity),
+ * and cluster labels are blended in so each cluster stays a coherent region.
+ * Output is centered, with the 90th-percentile radius scaled to 1. Deterministic.
+ */
+function embed3d(n, simMatrix, labels) {
+  if (n < 8) return null;
+  const k = Math.min(EMBED_NEIGHBORS, n - 1);
+  const knnIndices = [];
+  const knnDistances = [];
+  const order = new Array(n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) order[j] = j;
+    order.sort((x, y) => (y === i) - (x === i) || simMatrix[i * n + y] - simMatrix[i * n + x]);
+    const idx = order.slice(0, k);
+    knnIndices.push(idx);
+    knnDistances.push(idx.map(j => (j === i ? 0 : 1 - Math.min(1, simMatrix[i * n + j]))));
+  }
+
+  const umap = new UMAP({ nComponents: 3, nNeighbors: k, minDist: 0.3, spread: 1.0, nEpochs: 300, random: mulberry32(7) });
+  umap.setPrecomputedKNN(knnIndices, knnDistances);
+  umap.setSupervisedProjection(labels, { targetWeight: EMBED_CLUSTER_WEIGHT });
+  const raw = umap.fit(Array.from({ length: n }, (_, i) => [i]));
+
+  const mean = [0, 1, 2].map(d => raw.reduce((s, p) => s + p[d], 0) / n);
+  const centered = raw.map(p => p.map((v, d) => v - mean[d]));
+  const radii = centered.map(p => Math.hypot(...p)).sort((a, b) => a - b);
+  const scale = radii[Math.floor(n * 0.9)] || 1;
+  return centered.map(p => p.map(v => Number((v / scale).toFixed(4))));
+}
+
 /**
  * @param {Array<{id, name, genres: string[], countries: string[], score: number}>} artists  genres normalized
  * @param {Map<string, number>} collabs  key "idA|idB" (sorted) → number of shared top tracks
@@ -87,9 +124,12 @@ export function clusterArtists(artists, collabs) {
     if (shared) w += Math.min(1, 0.45 * shared);
     return w;
   };
+  // Full similarity matrix (kept for the 3D embedding) + thresholded graph edges.
+  const simMatrix = new Float32Array(n * n);
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const w = rawSim(artists[i], artists[j]);
+      simMatrix[i * n + j] = simMatrix[j * n + i] = w;
       if (w >= EDGE_THRESHOLD) weight.set(key(artists[i].id, artists[j].id), w);
     }
   }
@@ -206,5 +246,11 @@ export function clusterArtists(artists, collabs) {
     });
   });
 
-  return { clusters: described, assignment, affinityMatrix };
+  // 3D positions where distance means dissimilarity (for the "Similarity" view).
+  const clusterIndex = new Map(described.map((c, i) => [c.id, i]));
+  const embedding = embed3d(n, simMatrix, artists.map(a => clusterIndex.get(assignment.get(a.id).clusterId)));
+  const positions = new Map();
+  if (embedding) artists.forEach((a, i) => positions.set(a.id, embedding[i]));
+
+  return { clusters: described, assignment, affinityMatrix, positions };
 }

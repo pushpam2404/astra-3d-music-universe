@@ -18,7 +18,7 @@ export class CameraFlightController {
   flyToNode(node) {
     // Suns frame their whole cluster disc; planets frame their moon system.
     const standoffDist =
-      node.type === 'genre' ? Math.max(70, (node.clusterRadius || 60) * 1.9) :
+      node.type === 'genre' ? Math.max(70, (node.currentClusterRadius || node.clusterRadius || 60) * 1.9) :
       node.type === 'artist' ? 26 + (node.systemRadius || node.baseRadius * 4) * 2.2 : 14;
 
     const viewDir = new THREE.Vector3().subVectors(this.camera.position, this.controls.target).normalize();

@@ -283,7 +283,7 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
     }
   });
 
-  const { clusters, assignment, affinityMatrix } = clusterArtists(
+  const { clusters, assignment, affinityMatrix, positions } = clusterArtists(
     includedArtists.map(a => ({ id: a.id, name: a.name, ...artistFeatures.get(a.id), score: artistScore.get(a.id) || 1 })),
     collabs
   );
@@ -301,6 +301,7 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
       basePlays: Math.max(10, Math.round(artistScore.get(a.id) || 10)),
       ...estimatedFeatures(a.id),
       ranks: artistRanks.get(a.id) || {},
+      embed: positions.get(a.id),
       spotifyUrl: a.external_urls?.spotify || `https://open.spotify.com/artist/${a.id}`,
       imageUrl: a.images?.[0]?.url
     };

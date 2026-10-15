@@ -85,6 +85,10 @@ async function initApp() {
       cameraController.resetOverview();
     },
     onLayersChange: applyLayerVisibility,
+    onArrange: (mode) => {
+      cameraController.setSceneRadius(layout.setMode(mode, AppState.nodes));
+      if (!AppState.selectedNode) cameraController.resetOverview();
+    },
     onGlow: (level) => {
       bloomPass.strength = BLOOM_STRENGTH * level;
       factory.setGlow(level, AppState.nodes);
@@ -148,7 +152,9 @@ async function initApp() {
     AppState.edges = graph.edges;
     AppState.nodeMap = graph.nodeMap;
 
+    layout.mode = hud.arrangeMode();
     layout.initializeNodePositions(AppState.nodes);
+    hud.setArrangeAvailable(layout.hasSimilarity);
     cameraController.setSceneRadius(layout.boundingRadius);
 
     AppState.nodes.forEach(node => {

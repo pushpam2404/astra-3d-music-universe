@@ -444,7 +444,9 @@ export class CelestialFactory {
   updateNebulae(camera, suns) {
     for (const sun of suns) {
       if (!sun.nebula) continue;
-      const size = sun.nebula.scale.x;
+      // Size follows the active arrangement's cluster radius.
+      const size = (sun.currentClusterRadius || sun.clusterRadius || 60) * 2.3;
+      sun.nebula.scale.set(size, size, 1);
       const d = camera.position.distanceTo(sun.position);
       const fade = THREE.MathUtils.smoothstep(d, size * 0.35, size * 0.9);
       sun.nebula.material.opacity = NEBULA_OPACITY * this.glow * (sun.focusLevel ?? 1) * fade;
