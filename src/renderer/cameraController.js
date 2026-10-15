@@ -40,8 +40,8 @@ export class CameraFlightController {
     const R = this.sceneRadius || 200;
     const vFov = THREE.MathUtils.degToRad(this.camera.fov);
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
-    // Portrait screens get more margin: the galaxy's widest axis is horizontal.
-    const dist = (R / Math.sin(Math.min(vFov, hFov) / 2)) * (this.camera.aspect < 1 ? 1.0 : 0.82);
+    // The universe is a sphere: fit it whole, with a little more margin on portrait screens.
+    const dist = (R / Math.sin(Math.min(vFov, hFov) / 2)) * (this.camera.aspect < 1 ? 1.1 : 1.0);
     this.targetLookAt.set(0, 0, 0);
     this.targetCameraPos.set(0, dist * 0.55, dist * 0.835);
     this.active = true;

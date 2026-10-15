@@ -5,7 +5,7 @@ import { buildUniverseGraph } from './etl/graphNormalizer.js';
 import { getAuthStatus, fetchUniverse } from './api/backendClient.js';
 import { loadArtistMeta, saveArtistMeta } from './api/artistMetaCache.js';
 import { createUniverseScene } from './renderer/universeScene.js';
-import { initPostProcessing } from './renderer/postProcessing.js';
+import { initPostProcessing, BLOOM_STRENGTH } from './renderer/postProcessing.js';
 import { CelestialFactory } from './renderer/celestialFactory.js';
 import { GalaxyLayoutEngine } from './physics/galaxyLayout.js';
 import { CameraFlightController } from './renderer/cameraController.js';
@@ -29,7 +29,7 @@ const plural = (n, one, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? 
 
 async function initApp() {
   const { scene, camera, renderer, controls } = createUniverseScene(document.getElementById('webgl-canvas-container'));
-  const { composer } = initPostProcessing(renderer, scene, camera);
+  const { composer, bloomPass } = initPostProcessing(renderer, scene, camera);
 
   // Center the galaxy in the area the side panel leaves visible (right column on wide
   // screens, bottom sheet on phones), not in the whole window.
@@ -85,7 +85,15 @@ async function initApp() {
       cameraController.resetOverview();
     },
     onLayersChange: applyLayerVisibility,
-    onOrbitSpeed: (speed) => { layout.orbitMultiplier = speed; },
+    onGlow: (level) => {
+      bloomPass.strength = BLOOM_STRENGTH * level;
+      factory.setGlow(level, AppState.nodes);
+    },
+    onOrbitSpeed: (speed) => {
+      layout.orbitMultiplier = speed;
+      controls.autoRotate = speed > 0;
+      controls.autoRotateSpeed = 0.35 * speed;
+    },
     onNodeScale: (scale) => {
       AppState.nodeScaleMultiplier = scale;
       layout.nodeScaleMultiplier = scale;
@@ -157,6 +165,7 @@ async function initApp() {
     labelProjector.syncLabels(AppState.nodes, selectNode);
     hud.renderClusters(AppState.nodes.filter(n => n.type === 'genre'));
     hud.showClusters();
+    hud.restoreSettings();
     applyLayerVisibility();
     cameraController.resetOverview();
   }

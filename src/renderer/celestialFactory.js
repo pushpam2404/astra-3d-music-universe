@@ -10,6 +10,8 @@ const nebulaTextureCache = new Map();
 // Opacity multiplier for everything outside the focused node's neighbourhood.
 const DIM_LEVEL = 0.12;
 const FOCUS_LERP = 0.12;
+const SUN_LIGHT_INTENSITY = 1.2;
+const NEBULA_OPACITY = 0.16;
 const MAX_PULSES = 400;
 
 const EDGE_STYLE = {
@@ -128,11 +130,28 @@ export class CelestialFactory {
     this.scene = scene;
     this.solarMaterials = [];
     this.focusKey = null;
+    // Glow multiplier (View → Glow): scales halos, nebulae and sun light; 0 turns them off.
+    this.glow = 1;
   }
 
-  register(node, material, baseOpacity, isUniform = false) {
+  /** isGlow targets (halos, coronas) also scale with the Glow setting. */
+  register(node, material, baseOpacity, isUniform = false, isGlow = false) {
     node.fadeTargets = node.fadeTargets || [];
-    node.fadeTargets.push({ material, baseOpacity, isUniform });
+    node.fadeTargets.push({ material, baseOpacity, isUniform, isGlow });
+  }
+
+  applyFade(node) {
+    node.fadeTargets?.forEach(({ material, baseOpacity, isUniform, isGlow }) => {
+      const v = baseOpacity * (node.focusLevel ?? 1) * (isGlow ? this.glow : 1);
+      if (isUniform) material.uniforms.uOpacity.value = v;
+      else material.opacity = v;
+    });
+    if (node.light) node.light.intensity = SUN_LIGHT_INTENSITY * this.glow * (node.focusLevel ?? 1);
+  }
+
+  setGlow(level, nodes) {
+    this.glow = level;
+    nodes.forEach(n => this.applyFade(n));
   }
 
   buildGenreSun(node) {
@@ -149,18 +168,19 @@ export class CelestialFactory {
     group.add(ring);
     this.register(node, ring.material, 0.45);
 
-    const corona = makeSprite(getProceduralGlowTexture(node.color), node.haloRadius || node.baseRadius * 4, 0.75);
+    const corona = makeSprite(getProceduralGlowTexture(node.color), node.haloRadius || node.baseRadius * 4, 0.55);
     group.add(corona);
-    this.register(node, corona.material, 0.75);
+    this.register(node, corona.material, 0.55, false, true);
 
     // Cluster nebula: a large soft cloud that makes the cluster's territory readable.
     const nebulaSize = (node.clusterRadius || 60) * 2.3;
-    const nebula = makeSprite(getNebulaTexture(node.color), nebulaSize, 0.26);
+    const nebula = makeSprite(getNebulaTexture(node.color), nebulaSize, NEBULA_OPACITY);
     nebula.renderOrder = -1;
     group.add(nebula);
     node.nebula = nebula; // opacity driven by updateNebulae (focus × camera distance)
 
-    group.add(new THREE.PointLight(node.color, 2.2, (node.clusterRadius || 80) * 1.6, 1.2));
+    node.light = new THREE.PointLight(node.color, SUN_LIGHT_INTENSITY * this.glow, (node.clusterRadius || 80) * 1.6, 1.2);
+    group.add(node.light);
 
     node.meshGroup = group;
     node.sphereMesh = sphereMesh;
@@ -181,9 +201,9 @@ export class CelestialFactory {
     group.add(sphereMesh);
     this.register(node, planetMat, 1.0, true);
 
-    const glow = makeSprite(getProceduralGlowTexture(node.color), node.baseRadius * 3.4, 0.4);
+    const glow = makeSprite(getProceduralGlowTexture(node.color), node.baseRadius * 3.0, 0.2);
     group.add(glow);
-    this.register(node, glow.material, 0.4);
+    this.register(node, glow.material, 0.2, false, true);
 
     // Ring marks each cluster's headline artist.
     if (node.labelRank === 0 && !node.isBridge) {
@@ -401,10 +421,7 @@ export class CelestialFactory {
         this.trackMesh.setColorAt(n.instanceIndex, tmpColor.copy(n.baseInstanceColor).multiplyScalar(n.focusLevel));
         trackColorsDirty = true;
       }
-      n.fadeTargets?.forEach(({ material, baseOpacity, isUniform }) => {
-        if (isUniform) material.uniforms.uOpacity.value = baseOpacity * n.focusLevel;
-        else material.opacity = baseOpacity * n.focusLevel;
-      });
+      this.applyFade(n);
     }
     if (trackColorsDirty) this.trackMesh.instanceColor.needsUpdate = true;
 
@@ -430,7 +447,7 @@ export class CelestialFactory {
       const size = sun.nebula.scale.x;
       const d = camera.position.distanceTo(sun.position);
       const fade = THREE.MathUtils.smoothstep(d, size * 0.35, size * 0.9);
-      sun.nebula.material.opacity = 0.26 * (sun.focusLevel ?? 1) * fade;
+      sun.nebula.material.opacity = NEBULA_OPACITY * this.glow * (sun.focusLevel ?? 1) * fade;
     }
   }
 

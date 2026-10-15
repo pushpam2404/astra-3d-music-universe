@@ -36,7 +36,11 @@ export function createUniverseScene(canvasContainer) {
   controls.dampingFactor = 0.06;
   controls.minDistance = 6;
   controls.maxDistance = 850;
-  controls.maxPolarAngle = Math.PI / 1.85;
+  // Full rotation: the universe is a 3D cloud, so every side is worth seeing.
+  controls.zoomToCursor = true;
+  // A slow turn makes the depth readable; the Motion slider controls its speed.
+  controls.autoRotate = true;
+  controls.autoRotateSpeed = 0.35;
 
   // 5. Ambient & Directional Lighting
   const ambientLight = new THREE.AmbientLight(0x222238, 1.2);

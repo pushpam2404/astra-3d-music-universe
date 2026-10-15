@@ -1,22 +1,20 @@
 // src/physics/galaxyLayout.js
 /**
- * Deterministic galaxy layout (replaces the old spring/repulsion simulation, which
- * never settled and let clusters bleed into each other).
+ * Deterministic 3D "embedding cloud" layout, like a vector-database visualization:
  *
- *  - Suns (clusters) sit on a ring, ordered so that related clusters are neighbours
- *    (greedy seriation on cluster affinity). The ring radius is solved so neighbouring
- *    cluster discs never overlap.
- *  - Each cluster's artists form a phyllotaxis (sunflower) disc around its sun, most
- *    listened closest. The disc rotates rigidly, so planets never collide.
- *  - Bridge artists (strong ties to two clusters) sit in the gap between both suns.
+ *  - Each cluster is a 3D cloud of artists around its sun; the most-listened artists
+ *    sit near the center, the long tail toward the edge (radius ∝ cube root of rank,
+ *    so density stays even through the volume).
+ *  - Cluster centers sit on a sphere, ordered so related clusters are neighbours
+ *    (greedy seriation on affinity, laid along a Fibonacci spiral). The sphere's radius
+ *    is solved so neighbouring clouds just touch: one globe, no overlaps.
+ *  - Bridge artists (strong ties to two clusters) float between both clouds.
  *  - Tracks orbit their artist as moons on inclined orbits.
  *
- * Positions are a pure function of (layout, time): nothing drifts or explodes.
+ * Artist positions are static; only moons move (the camera slowly orbits instead).
  */
 import * as THREE from 'three';
 import { LAYOUT_CONFIG } from '../config/constants.js';
-
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
 function hash01(str) {
   let h = 2166136261;
@@ -27,7 +25,22 @@ function hash01(str) {
   return (h >>> 0) / 4294967295;
 }
 
-const centerKey = (c) => (c ? `${c.x},${c.y},${c.z}` : '0,0,0');
+/** Evenly spread unit vectors; consecutive indices are spatial neighbours. */
+function fibonacciSphere(i, n) {
+  if (n === 1) return new THREE.Vector3(0, 0, 0);
+  const y = 1 - (2 * (i + 0.5)) / n;
+  const r = Math.sqrt(1 - y * y);
+  const theta = Math.PI * (3 - Math.sqrt(5)) * i;
+  return new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r);
+}
+
+/** Deterministic, uniformly distributed direction for an id. */
+function directionFor(id) {
+  const u = hash01(`${id}:u`) * 2 - 1;
+  const phi = hash01(`${id}:phi`) * Math.PI * 2;
+  const r = Math.sqrt(1 - u * u);
+  return new THREE.Vector3(r * Math.cos(phi), u, r * Math.sin(phi));
+}
 
 /** Orders suns so that consecutive ones have high affinity. */
 function seriate(suns, affinity) {
@@ -47,27 +60,12 @@ function seriate(suns, affinity) {
   return order;
 }
 
-/** Ring radius at which consecutive chord lengths `d` exactly close the circle. */
-function solveRingRadius(d) {
-  if (d.length === 1) return 0;
-  if (d.length === 2) return Math.max(d[0], d[1]) / 2;
-  const total = (R) => d.reduce((s, di) => s + 2 * Math.asin(Math.min(1, di / (2 * R))), 0);
-  let lo = Math.max(...d) / 2;
-  let hi = d.reduce((s, x) => s + x, 0);
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    if (total(mid) > Math.PI * 2) lo = mid; else hi = mid;
-  }
-  return hi;
-}
-
 export class GalaxyLayoutEngine {
   constructor() {
     this.orbitMultiplier = 1.0;
     this.nodeScaleMultiplier = 1.0;
     this.time = 0;
     this.boundingRadius = 200;
-    this._tmp = new THREE.Vector3();
   }
 
   initializeNodePositions(nodes) {
@@ -83,15 +81,42 @@ export class GalaxyLayoutEngine {
       n.velocity = n.velocity || new THREE.Vector3();
     });
 
-    // Partition artists: disc members of their primary sun vs bridges.
-    const discMembers = new Map(suns.map(s => [s.id, []]));
+    // Moon systems first: an artist with many tracks needs more room in its cloud.
+    const tracksByArtist = new Map();
+    tracks.forEach(t => {
+      if (!tracksByArtist.has(t.artistId)) tracksByArtist.set(t.artistId, []);
+      tracksByArtist.get(t.artistId).push(t);
+    });
+    artists.forEach(a => {
+      const count = tracksByArtist.get(a.id)?.length || 0;
+      a.systemRadius = a.baseRadius + C.moonInnerGap + (count ? C.moonSpacing * Math.sqrt(count) * 1.6 : 0);
+    });
+
+    // Partition artists: cloud members of their primary sun vs bridges.
+    const members = new Map(suns.map(s => [s.id, []]));
     const bridges = [];
     artists.forEach(a => {
       const ids = (a.genres || []).filter(id => sunById.has(id));
       a.primarySunId = ids[0] || suns[0]?.id;
       a.secondarySunId = ids[1] || null;
       if (a.secondarySunId) bridges.push(a);
-      else if (a.primarySunId) discMembers.get(a.primarySunId).push(a);
+      else if (a.primarySunId) members.get(a.primarySunId).push(a);
+    });
+
+    // Cloud geometry per sun: offsets relative to the sun, ranked by plays.
+    suns.forEach(sun => {
+      const list = members.get(sun.id).sort((a, b) => b.plays - a.plays);
+      const meanSystem = list.length ? list.reduce((s, a) => s + a.systemRadius, 0) / list.length : 0;
+      const spacing = Math.max(C.cloudSpacing, meanSystem * 1.5);
+      const core = sun.baseRadius * C.sunCoreFactor + C.cloudInnerGap;
+      sun.clusterRadius = core + spacing * Math.cbrt(list.length + 1) * C.cloudDensity;
+      list.forEach((a, k) => {
+        const t = (k + 0.5) / list.length;
+        const r = core + (sun.clusterRadius - core) * Math.cbrt(t);
+        a.labelRank = k;
+        a.isBridge = false;
+        a.cloudOffset = directionFor(a.id).multiplyScalar(r);
+      });
     });
 
     // Cluster affinity: server-provided matrix, else shared bridge artists.
@@ -105,67 +130,26 @@ export class GalaxyLayoutEngine {
       return sharedCount.get([s.id, t.id].sort().join('|')) || 0;
     };
 
-    // Moon systems first: an artist with many tracks needs more room in its disc.
-    const tracksByArtist = new Map();
-    tracks.forEach(t => {
-      if (!tracksByArtist.has(t.artistId)) tracksByArtist.set(t.artistId, []);
-      tracksByArtist.get(t.artistId).push(t);
-    });
-    artists.forEach(a => {
-      const count = tracksByArtist.get(a.id)?.length || 0;
-      a.systemRadius = a.baseRadius + C.moonInnerGap + (count ? C.moonSpacing * Math.sqrt(count) * 1.6 : 0);
-    });
-
-    // Disc geometry per sun.
-    suns.forEach(sun => {
-      const members = discMembers.get(sun.id).sort((a, b) => b.plays - a.plays);
-      const bridgeCount = bridges.filter(b => b.primarySunId === sun.id || b.secondarySunId === sun.id).length;
-      const meanSystem = members.length ? members.reduce((s, a) => s + a.systemRadius, 0) / members.length : 0;
-      const spacing = Math.max(C.discSpacing, meanSystem * 1.7);
-      const core = sun.baseRadius * C.sunCoreFactor + C.discInnerGap;
-      sun.discCore = core;
-      sun.clusterRadius = core + spacing * Math.sqrt(members.length + 0.5) + C.discMargin;
-      sun.clusterSize = members.length + bridgeCount;
-      sun.discTilt = (hash01(sun.id) - 0.5) * C.discTiltRange;
-      sun.discSpin = (hash01(`${sun.id}:spin`) > 0.5 ? 1 : -1);
-      members.forEach((a, k) => {
-        a.labelRank = k;
-        a.discRadius = core + spacing * Math.sqrt(k + 0.5);
-        a.discAngle = k * GOLDEN_ANGLE;
-        a.discHeight = (hash01(`${a.id}:h`) - 0.5) * C.discThickness;
-        a.isBridge = false;
-      });
-    });
-
-    // Place suns: one ring per galaxy center (collision mode has two galaxies + a bridge).
-    const groups = new Map();
-    suns.forEach(s => {
-      const k = centerKey(s.galaxyCenter);
-      if (!groups.has(k)) groups.set(k, { center: s.galaxyCenter || { x: 0, y: 0, z: 0 }, suns: [] });
-      groups.get(k).suns.push(s);
-    });
-
+    // Cluster centers on a sphere; radius solved so no two clouds overlap.
+    const order = seriate(suns, affinity);
+    const dirs = order.map((_, i) => fibonacciSphere(i, order.length));
+    let R = 0;
+    for (let i = 0; i < order.length; i++) {
+      for (let j = i + 1; j < order.length; j++) {
+        const unitDist = dirs[i].distanceTo(dirs[j]);
+        R = Math.max(R, (order[i].clusterRadius + order[j].clusterRadius + C.clusterGap) / unitDist);
+      }
+    }
     let bounding = 0;
-    groups.forEach(({ center, suns: groupSuns }) => {
-      const order = seriate(groupSuns, affinity);
-      const d = order.map((s, i) => s.clusterRadius + order[(i + 1) % order.length].clusterRadius + C.clusterGap);
-      const R = solveRingRadius(d);
-      let theta = 0;
-      order.forEach((s, i) => {
-        s.ringAngle = theta;
-        s.anchor = new THREE.Vector3(
-          center.x + Math.cos(theta) * R,
-          center.y + (i % 2 ? 1 : -1) * C.sunHeightJitter,
-          center.z + Math.sin(theta) * R
-        );
-        s.position.copy(s.anchor);
-        if (order.length > 1) theta += 2 * Math.asin(Math.min(1, d[i] / (2 * R)));
-        bounding = Math.max(bounding, Math.hypot(center.x, center.z) + R + s.clusterRadius);
-      });
+    order.forEach((s, i) => {
+      s.anchor = dirs[i].clone().multiplyScalar(R);
+      s.position.copy(s.anchor);
+      bounding = Math.max(bounding, R + s.clusterRadius);
     });
-    this.boundingRadius = Math.max(120, bounding);
+    this.boundingRadius = Math.max(80, bounding);
 
-    // Bridges: in the gap between their two suns, fanned out perpendicular to the link.
+    // Bridges: between their two suns, nearer the one they belong to more, fanned out
+    // around the link so several bridges between the same pair don't stack.
     const bridgeSlots = new Map();
     bridges.forEach(a => {
       const k = [a.primarySunId, a.secondarySunId].sort().join('|');
@@ -176,24 +160,25 @@ export class GalaxyLayoutEngine {
       list.sort((x, y) => y.plays - x.plays).forEach((a, i) => {
         const A = sunById.get(a.primarySunId);
         const B = sunById.get(a.secondarySunId);
-        const dir = this._tmp.subVectors(B.anchor, A.anchor);
+        const dir = new THREE.Vector3().subVectors(B.anchor, A.anchor);
         const dist = dir.length() || 1;
         dir.divideScalar(dist);
-        // Lean toward the sun the artist is closer to (bridgeWeight = pull of the secondary).
         const w = Math.min(0.5, a.bridgeWeight ?? 0.5);
-        const along = THREE.MathUtils.lerp(A.clusterRadius + C.clusterGap * 0.5, dist - B.clusterRadius - C.clusterGap * 0.5, w * 2);
-        const perp = new THREE.Vector3(-dir.z, 0, dir.x);
-        const offset = (i - (list.length - 1) / 2) * C.bridgeSpacing;
+        const along = THREE.MathUtils.lerp(A.clusterRadius * 0.8, dist - B.clusterRadius * 0.8, w * 2);
+        const perpA = new THREE.Vector3().crossVectors(dir, Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
+        const perpB = new THREE.Vector3().crossVectors(dir, perpA);
+        const ring = C.bridgeSpacing * Math.sqrt(i);
+        const angle = i * 2.399963;
         a.isBridge = true;
         a.labelRank = i;
         a.bridgeAnchor = A.anchor.clone()
           .addScaledVector(dir, Math.max(0, along))
-          .addScaledVector(perp, offset)
-          .add(new THREE.Vector3(0, (i % 2 ? 1 : -1) * C.bridgeSpacing * 0.35, 0));
+          .addScaledVector(perpA, Math.cos(angle) * ring)
+          .addScaledVector(perpB, Math.sin(angle) * ring);
       });
     });
 
-    // Moons: sqrt spacing keeps big moon systems compact (a belt rather than rings to infinity).
+    // Moons: sqrt spacing keeps big moon systems compact.
     tracksByArtist.forEach((list, artistId) => {
       const parent = artistById.get(artistId);
       list.sort((x, y) => y.plays - x.plays).forEach((t, k) => {
@@ -216,14 +201,13 @@ export class GalaxyLayoutEngine {
   }
 
   applyPositions(nodes) {
-    const C = LAYOUT_CONFIG;
     const t = this.time;
     const scale = this.nodeScaleMultiplier;
 
     // Suns first, then artists (depend on suns), then tracks (depend on artists).
     for (const n of nodes) {
       if (n.type !== 'genre' || !n.anchor) continue;
-      n.position.set(n.anchor.x, n.anchor.y + Math.sin(t * 0.4 + n.ringAngle * 3) * 1.2, n.anchor.z);
+      n.position.copy(n.anchor);
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }
 
@@ -231,21 +215,12 @@ export class GalaxyLayoutEngine {
       if (n.type !== 'artist') continue;
       if (n.isBridge && n.bridgeAnchor) {
         n.position.copy(n.bridgeAnchor);
-        n.position.y += Math.sin(t * 0.8 + n.labelRank) * 1.5;
       } else {
         const s = this._sunOf(n, nodes);
-        if (!s) continue;
-        const angle = n.discAngle + t * C.discSpinSpeed * s.discSpin;
-        const r = n.discRadius * (0.85 + 0.15 * scale);
-        const x = Math.cos(angle) * r;
-        const z = Math.sin(angle) * r;
-        // Tilt the disc around the x axis.
-        const cosT = Math.cos(s.discTilt), sinT = Math.sin(s.discTilt);
-        n.position.set(
-          s.position.x + x,
-          s.position.y + n.discHeight + z * sinT,
-          s.position.z + z * cosT
-        );
+        if (!s || !n.cloudOffset) continue;
+        // Gentle breathing so the cloud feels alive without anything drifting off.
+        const breathe = 1 + Math.sin(t * 0.5 + n.labelRank * 0.7) * 0.012;
+        n.position.copy(s.position).addScaledVector(n.cloudOffset, (0.85 + 0.15 * scale) * breathe);
       }
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }

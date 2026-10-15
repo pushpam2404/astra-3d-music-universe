@@ -14,7 +14,7 @@ const $ = (id) => document.getElementById(id);
 export class Hud {
   /**
    * @param {object} state  AppState (layers, nodes)
-   * @param {object} cb     { onSelectNode, onBack, onResetCamera, onLayersChange, onOrbitSpeed, onNodeScale, onDisconnected }
+   * @param {object} cb     { onSelectNode, onBack, onResetCamera, onLayersChange, onGlow, onOrbitSpeed, onNodeScale, onDisconnected }
    */
   constructor(state, cb) {
     this.state = state;
@@ -122,16 +122,35 @@ export class Hud {
       });
     });
 
-    $('orbit-speed-slider').addEventListener('input', (e) => {
-      const v = Number(e.target.value);
-      $('orbit-speed-val').textContent = v === 0 ? 'paused' : `${v}×`;
-      this.cb.onOrbitSpeed(v);
-    });
+    // Glow and Motion are per-viewer preferences, remembered in this browser.
+    const bindSlider = (id, label, format, onChange) => {
+      const input = $(id);
+      try {
+        const saved = localStorage.getItem(`astra_${id}`);
+        if (saved !== null) input.value = saved;
+      } catch { /* storage unavailable */ }
+      const apply = () => {
+        const v = Number(input.value);
+        $(label).textContent = format(v);
+        onChange(v);
+        try { localStorage.setItem(`astra_${id}`, input.value); } catch { /* ignore */ }
+      };
+      input.addEventListener('input', apply);
+      this.applyInitialSettings.push(apply);
+    };
+    this.applyInitialSettings = [];
+    bindSlider('glow-slider', 'glow-val', v => `${Math.round(v * 100)}%`, v => this.cb.onGlow(v));
+    bindSlider('orbit-speed-slider', 'orbit-speed-val', v => (v === 0 ? 'paused' : `${v}×`), v => this.cb.onOrbitSpeed(v));
     $('node-scale-slider').addEventListener('input', (e) => {
       const v = Number(e.target.value);
       $('node-scale-val').textContent = `${v}×`;
       this.cb.onNodeScale(v);
     });
+  }
+
+  /** Re-applies remembered slider settings (call after a universe is built). */
+  restoreSettings() {
+    this.applyInitialSettings.forEach(apply => apply());
   }
 
   /* ---------- Side panel ---------- */

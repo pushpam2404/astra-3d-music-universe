@@ -5,15 +5,17 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 /** Scene render + bloom (suns and moons glow; panels stay crisp because they're HTML). */
+export const BLOOM_STRENGTH = 0.6;
+
 export function initPostProcessing(renderer, scene, camera) {
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
 
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.85, // strength
-    0.5,  // radius
-    0.28  // threshold
+    BLOOM_STRENGTH, // strength (scaled by the Glow setting)
+    0.45, // radius
+    0.42  // threshold: only genuinely bright things (suns) bloom
   );
   composer.addPass(bloomPass);
 
