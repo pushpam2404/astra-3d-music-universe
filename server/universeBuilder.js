@@ -30,9 +30,8 @@ const PAGE_CONCURRENCY = 4;
 // Longer horizons say more about lasting taste.
 const RANGE_WEIGHTS = { short_term: 1.0, medium_term: 1.2, long_term: 1.5 };
 const RECENT_PLAY_SCORE = 250;
-// Total time the whole metadata step may take on a load; Last.fm gets what's left.
+// Time budget for Last.fm's per-artist lookups on one load (they run alongside the others).
 const METADATA_BUDGET_MS = 26000;
-const MIN_LASTFM_BUDGET_MS = 8000;
 // Client-cached metadata is trusted this long; "nothing found" is rechecked sooner.
 const KNOWN_META_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const KNOWN_EMPTY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -170,18 +169,22 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
   const unknown = includedArtists.filter(a => !(a.genres || []).length && !isFresh(knownMeta[a.id]));
   const unknownIds = unknown.map(a => a.id);
 
-  const [wd, mb] = unknownIds.length
-    ? await Promise.all([fetchWikidataArtistMeta(unknownIds), fetchMusicBrainzArtistMeta(unknownIds)])
-    : [{ metaById: new Map() }, { metaById: new Map() }];
-  if (wd.error) diagnostics.warnings.push(`Wikidata lookup failed (${wd.error}).`);
-  if (mb.error) diagnostics.warnings.push(`MusicBrainz lookup failed (${mb.error}).`);
-
-  const lastfmBudget = Math.max(MIN_LASTFM_BUDGET_MS, METADATA_BUDGET_MS - (Date.now() - metaStart));
+  // All three sources run in parallel; Last.fm (one request per artist) gets the
+  // whole budget, most-listened artists first.
   const lastfmQueue = unknown
     .slice()
     .sort((x, y) => (artistScore.get(y.id) || 0) - (artistScore.get(x.id) || 0))
-    .map(a => ({ id: a.id, name: a.name, mbid: mb.metaById.get(a.id)?.mbid }));
-  const lf = await fetchLastfmTags(lastfmQueue, lastfmBudget);
+    .map(a => ({ id: a.id, name: a.name }));
+  const noMeta = { metaById: new Map() };
+  const [wd, mb, lf] = unknownIds.length
+    ? await Promise.all([
+      fetchWikidataArtistMeta(unknownIds),
+      fetchMusicBrainzArtistMeta(unknownIds),
+      fetchLastfmTags(lastfmQueue, METADATA_BUDGET_MS)
+    ])
+    : [noMeta, noMeta, { tagsById: new Map(), looked: 0, skipped: 0 }];
+  if (wd.error) diagnostics.warnings.push(`Wikidata lookup failed (${wd.error}).`);
+  if (mb.error) diagnostics.warnings.push(`MusicBrainz lookup failed (${mb.error}).`);
   if (lf.error) diagnostics.warnings.push(`${lf.error}; the rest will be looked up on the next load.`);
   diagnostics.lastfm = lastfmOn ? { looked: lf.looked, pending: lf.skipped } : 'LASTFM_API_KEY not set';
 

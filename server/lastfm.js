@@ -6,14 +6,15 @@
  * browser keeps what was learned (see artistMetaCache.js) so later loads only ask
  * about the rest.
  *
- * Uses the MusicBrainz id when known (exact match), else the name with autocorrect.
+ * Looks artists up by name with autocorrect (or by MusicBrainz id when given).
  * Requires LASTFM_API_KEY; without it this is a no-op.
  */
 import { usefulTags } from './tagFilter.js';
 
 const API = 'https://ws.audioscrobbler.com/2.0/';
-const CONCURRENCY = 4;
-// ~10 requests/s overall: well inside Last.fm's 5/s averaged over 5 minutes for one burst.
+const CONCURRENCY = 8;
+// ~20 requests/s during one load's burst (≤ ~26 s) averages under Last.fm's
+// 5 requests/s over 5 minutes.
 const MIN_INTERVAL_PER_WORKER_MS = 400;
 const REQUEST_TIMEOUT_MS = 6000;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;

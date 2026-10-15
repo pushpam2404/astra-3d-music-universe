@@ -47,7 +47,8 @@ async function sparql(query, signal, attempt = 0) {
     body: new URLSearchParams({ query }),
     signal
   });
-  if (res.status === 429 && attempt === 0) {
+  // 429 = throttled, 5xx = Wikidata having a moment; one retry each.
+  if ((res.status === 429 || res.status >= 500) && attempt === 0) {
     await sleep(Math.min(Number(res.headers.get('Retry-After')) || 2, 3) * 1000);
     return sparql(query, signal, attempt + 1);
   }
