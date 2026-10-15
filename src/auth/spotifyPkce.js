@@ -27,7 +27,9 @@ export function setSpotifyClientId(clientId) {
 }
 
 export function getRedirectUri() {
-  return window.location.origin + window.location.pathname;
+  let uri = window.location.origin + window.location.pathname;
+  if (!uri.endsWith('/')) uri += '/';
+  return uri;
 }
 
 function generateRandomString(len = 64) {
@@ -57,13 +59,15 @@ export async function redirectToSpotifyLogin() {
 
   const codeVerifier = generateRandomString(64);
   const codeChallenge = await computeCodeChallenge(codeVerifier);
+  const redirectUri = getRedirectUri();
 
   localStorage.setItem('astra_pkce_verifier', codeVerifier);
+  localStorage.setItem('astra_pkce_redirect_uri', redirectUri);
 
   const params = new URLSearchParams({
     client_id: clientId,
     response_type: 'code',
-    redirect_uri: getRedirectUri(),
+    redirect_uri: redirectUri,
     scope: SCOPES,
     code_challenge_method: 'S256',
     code_challenge: codeChallenge
@@ -79,6 +83,7 @@ export async function handleSpotifyCallbackIfPresent() {
 
   const clientId = getSpotifyClientId();
   const codeVerifier = localStorage.getItem('astra_pkce_verifier');
+  const redirectUri = localStorage.getItem('astra_pkce_redirect_uri') || getRedirectUri();
   if (!codeVerifier) {
     console.warn('Missing PKCE code_verifier in localStorage.');
     return null;
@@ -88,7 +93,7 @@ export async function handleSpotifyCallbackIfPresent() {
     client_id: clientId,
     grant_type: 'authorization_code',
     code,
-    redirect_uri: getRedirectUri(),
+    redirect_uri: redirectUri,
     code_verifier: codeVerifier
   });
 
