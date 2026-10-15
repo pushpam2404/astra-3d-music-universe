@@ -2,13 +2,15 @@
   "name": "astra-3d-music-universe",
   "version": "1.0.0",
   "description": "Interactive 3D WebGL observatory mapping Spotify listening history into celestial systems of Genre Suns, Artist Planets, and Track Satellites with real-time Web Audio API synthesis.",
-  "main": "index.js",
+  "main": "server/index.js",
   "directories": {
     "doc": "docs"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "node --watch-path=./server server/index.js",
+    "dev:client": "vite",
     "build": "vite build",
+    "start": "NODE_ENV=production node server/index.js",
     "preview": "vite preview"
   },
   "keywords": [],
@@ -16,6 +18,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "express": "^5.3.0",
     "three": "^0.186.1"
   },
   "devDependencies": {

@@ -276,27 +276,22 @@
     <div class="modal-box">
       <h3 class="modal-title">Connect Live Spotify</h3>
       <p class="modal-desc">
-        ASTRA connects directly to Spotify using <strong>OAuth 2.0 PKCE</strong> in your browser. No client secrets or backend servers are involved.
+        ASTRA's backend handles the Spotify login and keeps your tokens server-side, refreshing them automatically.
       </p>
 
       <div style="background: rgba(0, 240, 255, 0.06); border: 1px solid rgba(0, 240, 255, 0.2); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px;">
-        <div style="font-size: 11px; font-weight: 700; color: var(--neon-cyan); letter-spacing: 0.5px;">SPOTIFY DEVELOPER SETUP (1-MINUTE)</div>
+        <div style="font-size: 11px; font-weight: 700; color: var(--neon-cyan); letter-spacing: 0.5px;">ONE-TIME SERVER SETUP</div>
         <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-          1. Open the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer" style="color: var(--spotify-green); text-decoration: underline; font-weight: 600;">Spotify Developer Dashboard</a> &amp; create an app.<br>
-          2. In <strong>Settings &rarr; Redirect URIs</strong>, add this exact URI:
+          1. In the <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer" style="color: var(--spotify-green); text-decoration: underline; font-weight: 600;">Spotify Developer Dashboard</a>, open your app's <strong>Settings &rarr; Redirect URIs</strong> and add this exact URI:
         </div>
         <div style="display: flex; gap: 8px; align-items: center;">
-          <input type="text" id="spotify-redirect-uri-display" class="modal-input" readonly value="http://localhost:5173/" style="background: rgba(4, 4, 10, 0.9); font-size: 11px; cursor: text;">
+          <input type="text" id="spotify-redirect-uri-display" class="modal-input" readonly value="http://127.0.0.1:5173/api/auth/callback" style="background: rgba(4, 4, 10, 0.9); font-size: 11px; cursor: text;">
           <button id="copy-redirect-uri-btn" class="hud-btn" type="button" style="white-space: nowrap;">Copy URI</button>
         </div>
-        <div style="font-size: 11px; color: var(--text-muted);">
-          3. Copy your <strong>Client ID</strong> from Basic Information and paste below:
+        <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+          2. Put your <strong>Client ID</strong> and <strong>Client Secret</strong> in <code>.env</code> as <code>SPOTIFY_CLIENT_ID</code> / <code>SPOTIFY_CLIENT_SECRET</code>, then restart <code>npm run dev</code>.<br>
+          3. Under <strong>User Management</strong>, add the email of every Spotify account that will log in (Development Mode only allows listed users).
         </div>
-      </div>
-
-      <div>
-        <label for="spotify-client-id-input" style="display: block; font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px;">Your Spotify Client ID</label>
-        <input type="text" id="spotify-client-id-input" class="modal-input" placeholder="e.g. 4a1b2c3d4e5f67890123456789abcdef">
       </div>
 
       <div class="modal-actions">

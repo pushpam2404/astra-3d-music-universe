@@ -1,5 +1,5 @@
 // src/ui/hudController.js
-import { redirectToSpotifyLogin, getSpotifyClientId, setSpotifyClientId, logoutSpotify, getStoredAccessToken, getRedirectUri } from '../auth/spotifyPkce.js';
+import { SPOTIFY_LOGIN_URL, logout } from '../api/backendClient.js';
 import { parseStreamingHistoryJson } from '../etl/streamingHistoryParser.js';
 
 export class HudController {
@@ -233,44 +233,31 @@ export class HudController {
     const openSpotifyModalBtn = document.getElementById('open-spotify-modal-btn');
     const closeSpotifyModalBtn = document.getElementById('close-spotify-modal-btn');
     const spotifyLoginBtn = document.getElementById('spotify-login-btn');
-    const clientIdInput = document.getElementById('spotify-client-id-input');
-    const redirectUriDisplay = document.getElementById('spotify-redirect-uri-display');
     const copyRedirectBtn = document.getElementById('copy-redirect-uri-btn');
-
-    if (redirectUriDisplay) {
-      redirectUriDisplay.value = getRedirectUri();
-    }
+    const redirectUriDisplay = document.getElementById('spotify-redirect-uri-display');
 
     if (copyRedirectBtn && redirectUriDisplay) {
       copyRedirectBtn.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(redirectUriDisplay.value);
-          copyRedirectBtn.textContent = 'Copied!';
-          setTimeout(() => { copyRedirectBtn.textContent = 'Copy URI'; }, 2000);
         } catch {
           redirectUriDisplay.select();
           document.execCommand('copy');
-          copyRedirectBtn.textContent = 'Copied!';
-          setTimeout(() => { copyRedirectBtn.textContent = 'Copy URI'; }, 2000);
         }
+        copyRedirectBtn.textContent = 'Copied!';
+        setTimeout(() => { copyRedirectBtn.textContent = 'Copy URI'; }, 2000);
       });
     }
 
-    if (clientIdInput) {
-      const currentId = getSpotifyClientId();
-      clientIdInput.value = (currentId === 'YOUR_SPOTIFY_CLIENT_ID') ? '' : currentId;
-    }
-
     if (openSpotifyModalBtn && spotifyModal) {
-      openSpotifyModalBtn.addEventListener('click', () => {
-        const token = getStoredAccessToken();
-        if (token) {
+      openSpotifyModalBtn.addEventListener('click', async () => {
+        if (this.state.spotifyConnected) {
           if (confirm('You are currently connected to Spotify. Disconnect?')) {
-            logoutSpotify();
-            openSpotifyModalBtn.textContent = 'CONNECT SPOTIFY';
+            await logout().catch(err => console.warn('Logout failed:', err));
+            this.setSpotifyConnected(false);
             this.cb.onLoadPreset('cosmic_synth');
-            return;
           }
+          return;
         }
         spotifyModal.classList.add('active');
       });
@@ -281,18 +268,14 @@ export class HudController {
     }
 
     if (spotifyLoginBtn) {
-      spotifyLoginBtn.addEventListener('click', async () => {
-        const clientId = clientIdInput?.value?.trim();
-        if (!clientId) {
-          alert('Please enter your Spotify Developer Client ID.');
+      spotifyLoginBtn.addEventListener('click', () => {
+        if (!this.authStatus?.configured) {
+          alert(this.authStatus?.backendUnavailable
+            ? 'The ASTRA backend is not running. Start it with `npm run dev`.'
+            : 'The backend is missing SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET. Add them to .env and restart.');
           return;
         }
-        setSpotifyClientId(clientId);
-        try {
-          await redirectToSpotifyLogin();
-        } catch (err) {
-          alert(`Login failed: ${err.message}`);
-        }
+        window.location.href = SPOTIFY_LOGIN_URL;
       });
     }
 
@@ -354,6 +337,19 @@ export class HudController {
         collisionModal.classList.remove('active');
       });
     }
+  }
+
+  setAuthStatus(status) {
+    this.authStatus = status;
+    const redirectUriDisplay = document.getElementById('spotify-redirect-uri-display');
+    if (redirectUriDisplay && status.redirectUri) redirectUriDisplay.value = status.redirectUri;
+    this.setSpotifyConnected(status.loggedIn);
+  }
+
+  setSpotifyConnected(connected) {
+    this.state.spotifyConnected = connected;
+    const btn = document.getElementById('open-spotify-modal-btn');
+    if (btn) btn.textContent = connected ? 'SPOTIFY CONNECTED' : 'CONNECT SPOTIFY';
   }
 
   showCollisionBanner(metrics) {

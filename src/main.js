@@ -2,8 +2,7 @@
 import * as THREE from 'three';
 import { GALAXY_PRESETS } from './config/presets.js';
 import { buildUniverseGraph } from './etl/graphNormalizer.js';
-import { fetchCompleteUserTaste } from './etl/spotifyApiClient.js';
-import { handleSpotifyCallbackIfPresent, getStoredAccessToken } from './auth/spotifyPkce.js';
+import { getAuthStatus, fetchUniverse } from './api/backendClient.js';
 import { collideGalaxies } from './etl/galaxyCollider.js';
 import { TemporalUniverseScrubber } from './etl/timeMachine4D.js';
 import { createUniverseScene } from './renderer/universeScene.js';
@@ -25,6 +24,7 @@ const AppState = {
   orbitSpeedMultiplier: 1.0,
   nodeScaleMultiplier: 1.0,
   autoPilotActive: false,
+  spotifyConnected: false,
   layers: {
     genres: true,
     artists: true,
@@ -200,14 +200,8 @@ async function initApp() {
     },
 
     onTimeRangeChange: async (range) => {
-      const token = getStoredAccessToken();
-      if (token && AppState.activePreset.startsWith('spotify')) {
-        try {
-          const liveData = await fetchCompleteUserTaste(token, range);
-          loadDataset(liveData);
-        } catch (err) {
-          console.error('Failed to fetch Spotify time range:', err);
-        }
+      if (AppState.activePreset === 'live_spotify') {
+        await loadLiveSpotify(range);
       } else {
         // Multiplier fallback for presets
         const mult = range === 'short_term' ? 0.6 : (range === 'long_term' ? 1.7 : 1.0);
@@ -300,23 +294,44 @@ async function initApp() {
     }
   });
 
-  // 7. Check for Spotify PKCE Redirect Callback or Existing Session
-  try {
-    const callbackToken = await handleSpotifyCallbackIfPresent();
-    const token = callbackToken || getStoredAccessToken();
-    if (token) {
-      const connectBtn = document.getElementById('open-spotify-modal-btn');
-      if (connectBtn) connectBtn.textContent = 'SPOTIFY CONNECTED';
+  function showNotice(message) {
+    const descEl = document.getElementById('galaxy-desc-text');
+    if (descEl) descEl.textContent = `⚠ ${message}`;
+  }
 
-      const liveSpotifyData = await fetchCompleteUserTaste(token, AppState.timeRange);
+  // Loads the user's live universe from the backend. Returns true on success;
+  // on failure, keeps whatever is currently rendered and shows the reason.
+  async function loadLiveSpotify(range) {
+    try {
+      const { dataset, diagnostics } = await fetchUniverse(range);
+      console.info('[ASTRA] Spotify universe diagnostics:', diagnostics);
+      if (!dataset) {
+        showNotice(diagnostics.warnings.join(' '));
+        return false;
+      }
       AppState.activePreset = 'live_spotify';
-      loadDataset(liveSpotifyData);
-    } else {
-      loadDataset(GALAXY_PRESETS.cosmic_synth);
+      loadDataset(dataset);
+      if (diagnostics.warnings.length) showNotice(diagnostics.warnings.join(' '));
+      return true;
+    } catch (err) {
+      console.error('Failed to load Spotify universe:', err);
+      if (err.status === 401) hud.setSpotifyConnected(false);
+      showNotice(err.message);
+      return false;
     }
-  } catch (err) {
-    console.warn('Spotify auth or load warning:', err);
-    loadDataset(GALAXY_PRESETS.cosmic_synth);
+  }
+
+  // 7. Restore backend Spotify session (OAuth callback redirects back to "/")
+  const authError = new URLSearchParams(window.location.search).get('auth_error');
+  if (authError) window.history.replaceState({}, document.title, window.location.pathname);
+
+  loadDataset(GALAXY_PRESETS.cosmic_synth);
+  const authStatus = await getAuthStatus();
+  hud.setAuthStatus(authStatus);
+  if (authError) {
+    showNotice(`Spotify login failed: ${authError}`);
+  } else if (authStatus.loggedIn) {
+    await loadLiveSpotify(AppState.timeRange);
   }
 
   // 8. Master Animation & Render Loop (60 FPS)
