@@ -14,9 +14,9 @@ const MAX_PULSES = 400;
 
 const EDGE_STYLE = {
   artist_genre: { opacity: 0.09, focused: 0.55 },
-  artist_bridge: { opacity: 0.2, focused: 0.7 },
+  artist_bridge: { opacity: 0.1, focused: 0.7 },
   track_artist: { opacity: 0.05, focused: 0.4 },
-  track_collab: { opacity: 0.32, focused: 0.85 }
+  track_collab: { opacity: 0.1, focused: 0.85 }
 };
 
 /**
