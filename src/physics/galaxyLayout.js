@@ -22,6 +22,8 @@ import * as THREE from 'three';
 import { LAYOUT_CONFIG } from '../config/constants.js';
 
 const TRANSITION_MS = 1400;
+// Similarity view: outliers beyond this multiple of the 90th-percentile radius are pulled in.
+const OUTLIER_EDGE = 1.35;
 
 function hash01(str) {
   let h = 2166136261;
@@ -255,6 +257,17 @@ export class GalaxyLayoutEngine {
 
     withEmbed.forEach((a, i) => { a.layoutPos.similarity = pts[i].multiplyScalar(scale); });
 
+    // Artists with little data can land far from everything; pull extreme outliers back
+    // to the sphere's edge (direction kept) so the universe stays one cloud.
+    const radii = withEmbed.map(a => a.layoutPos.similarity.length()).sort((x, y) => x - y);
+    const r90 = radii[Math.floor(radii.length * 0.9)] || 1;
+    const edge = r90 * OUTLIER_EDGE;
+    withEmbed.forEach(a => {
+      const p = a.layoutPos.similarity;
+      const r = p.length();
+      if (r > edge) p.multiplyScalar((edge + Math.log1p(r - edge)) / r);
+    });
+
     const centroid = new Map(suns.map(s => [s.id, { sum: new THREE.Vector3(), list: [] }]));
     withEmbed.forEach(a => {
       const c = centroid.get(a.primarySunId);
@@ -263,7 +276,6 @@ export class GalaxyLayoutEngine {
         c.list.push(a.layoutPos.similarity);
       }
     });
-    let bounding = 0;
     suns.forEach(sun => {
       const c = centroid.get(sun.id);
       const center = c.list.length ? c.sum.divideScalar(c.list.length) : new THREE.Vector3();
@@ -277,9 +289,9 @@ export class GalaxyLayoutEngine {
         const sun = sunById.get(a.primarySunId);
         a.layoutPos.similarity = (sun?.layoutPos.similarity || new THREE.Vector3()).clone().add(directionFor(a.id).multiplyScalar(sun?.baseRadius * 3 || 10));
       }
-      bounding = Math.max(bounding, a.layoutPos.similarity.length() + a.systemRadius);
     });
-    this.bounds.similarity = Math.max(80, bounding);
+    // Frame where the artists are, not the single furthest one.
+    this.bounds.similarity = Math.max(80, r90 * 1.15);
   }
 
   step(nodes, delta = 16) {
