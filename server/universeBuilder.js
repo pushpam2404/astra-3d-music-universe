@@ -160,7 +160,11 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
   //    Spotify's own genres (empty for Dev Mode apps) → what the browser already knows →
   //    fresh lookups (Wikidata + MusicBrainz in parallel, then Last.fm with the time left).
   const metaStart = Date.now();
-  const isFresh = (m) => m && Array.isArray(m.g) && Date.now() - (Number(m.t) || 0) < (m.g.length ? KNOWN_META_TTL_MS : KNOWN_EMPTY_TTL_MS);
+  // Entries learned before Last.fm was configured (no `l` flag) are re-checked once it is.
+  const lastfmOn = isLastfmConfigured();
+  const isFresh = (m) => m && Array.isArray(m.g)
+    && !(lastfmOn && !m.l)
+    && Date.now() - (Number(m.t) || 0) < (m.g.length ? KNOWN_META_TTL_MS : KNOWN_EMPTY_TTL_MS);
   // knownMeta comes from the browser: keep only well-formed strings.
   const cleanList = (list, max) => (Array.isArray(list) ? list.filter(x => typeof x === 'string' && x.length < 60).slice(0, max) : []);
   const unknown = includedArtists.filter(a => !(a.genres || []).length && !isFresh(knownMeta[a.id]));
@@ -179,7 +183,7 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
     .map(a => ({ id: a.id, name: a.name, mbid: mb.metaById.get(a.id)?.mbid }));
   const lf = await fetchLastfmTags(lastfmQueue, lastfmBudget);
   if (lf.error) diagnostics.warnings.push(`${lf.error}; the rest will be looked up on the next load.`);
-  diagnostics.lastfm = isLastfmConfigured() ? { looked: lf.looked, pending: lf.skipped } : 'LASTFM_API_KEY not set';
+  diagnostics.lastfm = lastfmOn ? { looked: lf.looked, pending: lf.skipped } : 'LASTFM_API_KEY not set';
 
   const genreSource = { spotify: 0, remembered: 0, enriched: 0, none: 0 };
   const artistGenres = new Map();
@@ -209,8 +213,8 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
       if (genres.length) genreSource.enriched++;
       else genreSource.none++;
       // Remember it unless Last.fm still owes us a lookup for this artist.
-      const lastfmPending = isLastfmConfigured() && !lf.tagsById.has(a.id);
-      if (!lastfmPending || w.genres.length) artistMeta[a.id] = { g: genres, c: countries, t: now };
+      const lastfmPending = lastfmOn && !lf.tagsById.has(a.id);
+      if (!lastfmPending) artistMeta[a.id] = { g: genres, c: countries, t: now, ...(lastfmOn ? { l: 1 } : {}) };
     }
     artistGenres.set(a.id, genres);
     artistFeatures.set(a.id, { genres, countries });
