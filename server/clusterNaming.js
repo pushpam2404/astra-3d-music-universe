@@ -10,30 +10,10 @@
  *   nothing to go on             → "Atif Aslam & Co." (named after its biggest artist)
  */
 import { familyInfo, OTHER_FAMILY, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
-
-const DEMONYMS = {
-  India: 'Indian', Pakistan: 'Pakistani', Bangladesh: 'Bangladeshi', Nepal: 'Nepali', 'Sri Lanka': 'Sri Lankan',
-  'United States': 'American', 'United States of America': 'American', 'United Kingdom': 'British', England: 'English',
-  Canada: 'Canadian', Australia: 'Australian', 'New Zealand': 'Kiwi', Ireland: 'Irish', Scotland: 'Scottish',
-  'South Korea': 'Korean', Japan: 'Japanese', China: 'Chinese', Taiwan: 'Taiwanese', Indonesia: 'Indonesian',
-  Philippines: 'Filipino', Thailand: 'Thai', Vietnam: 'Vietnamese', France: 'French', Germany: 'German',
-  Italy: 'Italian', Spain: 'Spanish', Portugal: 'Portuguese', Netherlands: 'Dutch', Belgium: 'Belgian',
-  Sweden: 'Swedish', Norway: 'Norwegian', Denmark: 'Danish', Finland: 'Finnish', Iceland: 'Icelandic',
-  Poland: 'Polish', Russia: 'Russian', Ukraine: 'Ukrainian', Turkey: 'Turkish', Greece: 'Greek', Israel: 'Israeli',
-  Iran: 'Iranian', Egypt: 'Egyptian', Nigeria: 'Nigerian', Ghana: 'Ghanaian', 'South Africa': 'South African',
-  Brazil: 'Brazilian', Mexico: 'Mexican', Argentina: 'Argentine', Colombia: 'Colombian', Chile: 'Chilean',
-  'Puerto Rico': 'Puerto Rican', Jamaica: 'Jamaican', Cuba: 'Cuban', Punjab: 'Punjab', Karachi: 'Karachi',
-  Lahore: 'Lahori', Mumbai: 'Mumbai'
-};
+import { DEMONYMS, PLACE_TAGS } from './places.js';
 
 // Genres so broad that they only name a cluster when nothing more specific exists.
 const BROAD_GENRES = new Set(['pop', 'rock', 'world', 'music', 'singer songwriter', 'soundtrack', 'electronic', 'dance', 'instrumental', 'vocal']);
-// Place tags (common on Last.fm: "india", "pakistani", "uk") say where, not what: they
-// feed similarity but never name a cluster.
-const PLACE_TAGS = new Set([
-  ...Object.keys(DEMONYMS), ...Object.values(DEMONYMS),
-  'uk', 'usa', 'us', 'america', 'desi', 'south asian', 'asian', 'european', 'latino', 'african'
-].map(t => t.toLowerCase()));
 // Words that already say where the music is from; no demonym needed next to them.
 const PLACE_WORDS = /\b(indian|punjabi|pakistani|hindi|urdu|filmi|bollywood|desi|bhangra|qawwali|k pop|j pop|korean|japanese|latin|brazilian|uk|british|french|german|african|arab|turkish|tamil|telugu)\b/;
 

@@ -20,6 +20,7 @@ import { normalizeGenre, OCCUPATION_GENRES } from '../src/config/genreTaxonomy.j
 import { fetchWikidataArtistMeta } from './genreEnrichment.js';
 import { fetchMusicBrainzArtistMeta } from './musicbrainz.js';
 import { fetchLastfmTags, isLastfmConfigured } from './lastfm.js';
+import { tagsContradictCountry } from './places.js';
 import { clusterArtists } from './clustering.js';
 
 const PAGE_SIZE = 50;
@@ -36,7 +37,7 @@ const METADATA_BUDGET_MS = 26000;
 const KNOWN_META_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const KNOWN_EMPTY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Bump when the Last.fm lookup method changes, so browsers re-check their cached artists.
-const LASTFM_METHOD_VERSION = 2;
+const LASTFM_METHOD_VERSION = 3;
 // Same cap for fresh and remembered genres, so a cached load clusters identically.
 const MAX_GENRES_PER_ARTIST = 16;
 const SAVED_TRACK_SCORE = 120;
@@ -191,13 +192,14 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
       fetchMusicBrainzArtistMeta(unknownIds),
       fetchLastfmTags(lastfmQueue, METADATA_BUDGET_MS)
     ])
-    : [noMeta, noMeta, { tagsById: new Map(), looked: 0, skipped: 0 }];
+    : [noMeta, noMeta, { tagsById: new Map(), viaById: new Map(), looked: 0, viaTrack: 0, skipped: 0 }];
   if (wd.error) diagnostics.warnings.push(`Wikidata lookup failed (${wd.error}).`);
   if (mb.error) diagnostics.warnings.push(`MusicBrainz lookup failed (${mb.error}).`);
   if (lf.error) diagnostics.warnings.push(`${lf.error}; the rest will be looked up on the next load.`);
   diagnostics.lastfm = lastfmOn ? { looked: lf.looked, viaTrack: lf.viaTrack, pending: lf.skipped } : 'LASTFM_API_KEY not set';
 
   const genreSource = { spotify: 0, remembered: 0, enriched: 0, none: 0 };
+  let lastfmRejected = 0;
   const artistGenres = new Map();
   const artistFeatures = new Map();
   const artistMeta = {};
@@ -217,11 +219,16 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
     } else {
       const w = wd.metaById.get(a.id) || { genres: [], countries: [], occupations: [] };
       const m = mb.metaById.get(a.id) || { country: null, area: null, tags: [] };
-      const lfTags = lf.tagsById.get(a.id) || [];
+      countries = m.country ? [m.country] : (w.countries.length ? w.countries : (m.area ? [m.area] : []));
+      let lfTags = lf.tagsById.get(a.id) || [];
+      // An artist page tagged with another country belongs to a same-name artist.
+      if (lf.viaById.get(a.id) === 'artist' && tagsContradictCountry(lfTags, countries)) {
+        lfTags = [];
+        lastfmRejected++;
+      }
       const raw = [...w.genres, ...lfTags, ...(w.genres.length || lfTags.length ? [] : m.tags)];
       const implied = w.occupations.map(o => OCCUPATION_GENRES[o.toLowerCase()]).filter(Boolean);
       genres = [...new Set([...raw, ...implied].map(normalizeGenre))].slice(0, MAX_GENRES_PER_ARTIST);
-      countries = m.country ? [m.country] : (w.countries.length ? w.countries : (m.area ? [m.area] : []));
       if (genres.length) genreSource.enriched++;
       else genreSource.none++;
       // Remember it unless Last.fm still owes us a lookup for this artist.
@@ -232,6 +239,7 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
     artistFeatures.set(a.id, { genres, countries });
   });
   diagnostics.genreSource = genreSource;
+  if (diagnostics.lastfm?.looked !== undefined) diagnostics.lastfm.rejectedSameName = lastfmRejected;
   diagnostics.metadataMs = Date.now() - metaStart;
 
   // 4. Cluster artists into suns (genre similarity + collaborations).

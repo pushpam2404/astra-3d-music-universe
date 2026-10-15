@@ -32,7 +32,7 @@ export function isLastfmConfigured() {
 }
 
 // A track needs at least this many useful tags to be trusted over the artist page.
-const MIN_TRACK_TAGS = 2;
+const MIN_TRACK_TAGS = 1;
 
 /** "Song (feat. X) - Remastered 2011" → "Song" */
 const cleanTrackName = (t) => t.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+-\s+.*$/, '').trim();
@@ -65,17 +65,21 @@ async function topTags({ name, track }) {
 /**
  * @param {Array<{id, name, track?}>} artists  in priority order; track = their most-played song here
  * @param {number} budgetMs  stop starting new lookups after this long
- * @returns {{ tagsById: Map<id, string[]>, looked: number, viaTrack: number, skipped: number, error?: string }}
+ * @returns {{ tagsById: Map<id, string[]>, viaById: Map<id, 'track'|'artist'>, looked: number, viaTrack: number, skipped: number, error?: string }}
  */
 export async function fetchLastfmTags(artists, budgetMs) {
   const tagsById = new Map();
-  if (!isLastfmConfigured() || artists.length === 0) return { tagsById, looked: 0, viaTrack: 0, skipped: 0 };
+  const viaById = new Map();
+  if (!isLastfmConfigured() || artists.length === 0) return { tagsById, viaById, looked: 0, viaTrack: 0, skipped: 0 };
 
   const now = Date.now();
   const queue = [];
   artists.forEach(a => {
     const hit = cache.get(a.id);
-    if (hit && now - hit.fetchedAt < CACHE_TTL_MS) tagsById.set(a.id, hit.tags);
+    if (hit && now - hit.fetchedAt < CACHE_TTL_MS) {
+      tagsById.set(a.id, hit.tags);
+      viaById.set(a.id, hit.via);
+    }
     else queue.push(a);
   });
 
@@ -90,8 +94,9 @@ export async function fetchLastfmTags(artists, budgetMs) {
       const started = Date.now();
       try {
         const { tags, via } = await topTags(a);
-        cache.set(a.id, { tags, fetchedAt: Date.now() });
+        cache.set(a.id, { tags, via, fetchedAt: Date.now() });
         tagsById.set(a.id, tags);
+        viaById.set(a.id, via);
         looked++;
         if (via === 'track') viaTrack++;
       } catch (err) {
@@ -104,5 +109,5 @@ export async function fetchLastfmTags(artists, budgetMs) {
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   const skipped = queue.length - looked;
-  return { tagsById, looked, viaTrack, skipped, ...(rateLimited ? { error: 'Last.fm rate limit reached' } : {}) };
+  return { tagsById, viaById, looked, viaTrack, skipped, ...(rateLimited ? { error: 'Last.fm rate limit reached' } : {}) };
 }
