@@ -10,6 +10,7 @@ const nebulaTextureCache = new Map();
 // Opacity multiplier for everything outside the focused node's neighbourhood.
 const DIM_LEVEL = 0.12;
 const FOCUS_LERP = 0.12;
+const MAX_PULSES = 400;
 
 const EDGE_STYLE = {
   artist_genre: { opacity: 0.09, focused: 0.55 },
@@ -198,80 +199,166 @@ export class CelestialFactory {
     return group;
   }
 
-  buildTrackSatellite(node) {
-    const group = new THREE.Group();
-    group.position.copy(node.position);
+  /**
+   * All tracks share one InstancedMesh (thousands of Liked Songs would otherwise be
+   * thousands of draw calls). Each track gets a lightweight handle with the same
+   * `position` / `scale` / `visible` surface as a THREE.Group, so the layout, layer
+   * toggles and time machine keep working unchanged.
+   */
+  buildTrackSatellites(trackNodes) {
+    const geometry = new THREE.SphereGeometry(1, 12, 10);
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
+    const mesh = new THREE.InstancedMesh(geometry, material, Math.max(1, trackNodes.length));
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.frustumCulled = false;
 
-    const color = new THREE.Color(node.color || COLOR_SPOTIFY_GREEN).lerp(new THREE.Color('#FFFFFF'), 0.35);
-    const material = new THREE.MeshStandardMaterial({
-      color,
-      emissive: color,
-      emissiveIntensity: 0.45,
-      roughness: 0.4,
-      metalness: 0.1,
-      transparent: true
+    const white = new THREE.Color('#FFFFFF');
+    trackNodes.forEach((node, i) => {
+      node.instanceIndex = i;
+      node.baseInstanceColor = new THREE.Color(node.color || COLOR_SPOTIFY_GREEN).lerp(white, 0.3).multiplyScalar(0.85);
+      node.meshGroup = { position: new THREE.Vector3(), scale: new THREE.Vector3(1, 1, 1), visible: true, isInstanceHandle: true };
+      mesh.setColorAt(i, node.baseInstanceColor);
     });
-    const sphereMesh = new THREE.Mesh(new THREE.SphereGeometry(node.baseRadius, 16, 16), material);
-    sphereMesh.userData = { node };
-    group.add(sphereMesh);
-    this.register(node, material, 1.0);
+    mesh.count = trackNodes.length;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
-    const glow = makeSprite(getProceduralGlowTexture(`#${color.getHexString()}`), node.baseRadius * 3.2, 0.35);
-    group.add(glow);
-    this.register(node, glow.material, 0.35);
-
-    node.meshGroup = group;
-    node.sphereMesh = sphereMesh;
-    node.sprite = glow;
-    this.scene.add(group);
-    return group;
+    this.trackMesh = mesh;
+    this.trackNodes = trackNodes;
+    this.scene.add(mesh);
+    return mesh;
   }
 
-  buildEdgeVisuals(edges) {
-    const edgeLinesGroup = new THREE.Group();
-    const pulseParticles = [];
-    const pulseGeo = new THREE.SphereGeometry(0.45, 8, 8);
+  /** Writes every track handle into the instance matrices (call once per frame). */
+  updateTrackInstances() {
+    if (!this.trackMesh) return;
+    const m = this._m || (this._m = new THREE.Matrix4());
+    const q = this._q || (this._q = new THREE.Quaternion());
+    const sc = this._s || (this._s = new THREE.Vector3());
+    for (const node of this.trackNodes) {
+      const h = node.meshGroup;
+      const r = h.visible ? node.baseRadius : 0;
+      sc.copy(h.scale).multiplyScalar(r);
+      m.compose(h.position, q, sc);
+      this.trackMesh.setMatrixAt(node.instanceIndex, m);
+    }
+    this.trackMesh.instanceMatrix.needsUpdate = true;
+  }
 
-    edges.forEach((edge, idx) => {
-      // An artist's link to its secondary sun is a bridge link.
+  /** Resolves a raycast hit (planet/sun mesh or a track instance) to its node. */
+  nodeFromHit(hit) {
+    if (hit.object === this.trackMesh) return this.trackNodes[hit.instanceId] || null;
+    return hit.object.userData.node || null;
+  }
+
+  disposeBatches() {
+    [this.trackMesh, this.edgeLines, this.pulseMesh].forEach(obj => {
+      if (!obj) return;
+      this.scene.remove(obj);
+      obj.geometry.dispose();
+      obj.material.dispose();
+    });
+    this.trackMesh = this.edgeLines = this.pulseMesh = null;
+    this.trackNodes = [];
+  }
+
+  /**
+   * All links are one LineSegments draw call. With additive blending, a vertex color
+   * scaled by k looks exactly like opacity k, so per-link opacity lives in the colors.
+   */
+  buildEdgeVisuals(edges) {
+    const positions = new Float32Array(edges.length * 6);
+    const colors = new Float32Array(edges.length * 6);
+    edges.forEach((edge, i) => {
       const isBridgeLink = edge.type === 'artist_genre' && edge.source.genres?.[1] === edge.target.id;
       edge.style = EDGE_STYLE[isBridgeLink ? 'artist_bridge' : edge.type] || EDGE_STYLE.track_artist;
-
-      const lineGeo = new THREE.BufferGeometry().setFromPoints([edge.source.position, edge.target.position]);
-      const lineMat = new THREE.LineBasicMaterial({
-        color: new THREE.Color(edge.color || '#00F0FF'),
-        transparent: true,
-        opacity: edge.style.opacity,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      });
-      const line = new THREE.Line(lineGeo, lineMat);
-      edge.lineMesh = line;
-      edgeLinesGroup.add(line);
-
-      // Energy pulses only on the structural links, not on every moon tether.
-      if (edge.type === 'track_artist') return;
-      const pulseMat = new THREE.MeshBasicMaterial({
-        color: new THREE.Color(edge.type === 'track_collab' ? '#FFB800' : (edge.color || '#FFFFFF')),
-        transparent: true,
-        opacity: 0.8,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      });
-      const pulseMesh = new THREE.Mesh(pulseGeo, pulseMat);
-      edgeLinesGroup.add(pulseMesh);
-      edge.pulseMesh = pulseMesh;
-      pulseParticles.push({
-        mesh: pulseMesh,
-        edge,
-        progress: (idx * 0.173) % 1.0,
-        speed: 0.0025 + (idx % 4) * 0.001
-      });
+      edge.index = i;
+      edge.baseColor = new THREE.Color(edge.color || '#00F0FF');
+      edge.level = edge.style.opacity;
+      this.writeEdgeColor(colors, edge);
     });
 
-    this.scene.add(edgeLinesGroup);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
+    const material = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
+    });
+    const lines = new THREE.LineSegments(geometry, material);
+    lines.frustumCulled = false;
+    this.edgeLines = lines;
+
+    // Energy pulses ride the structural links only (not every moon tether), capped.
+    const pulseEdges = edges.filter(e => e.type !== 'track_artist').slice(0, MAX_PULSES);
+    const pulseMesh = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.45, 8, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+      Math.max(1, pulseEdges.length)
+    );
+    pulseMesh.count = pulseEdges.length;
+    pulseMesh.frustumCulled = false;
+    pulseEdges.forEach((e, i) => pulseMesh.setColorAt(i, new THREE.Color(e.type === 'track_collab' ? '#FFB800' : (e.color || '#FFFFFF'))));
+    if (pulseMesh.instanceColor) pulseMesh.instanceColor.needsUpdate = true;
+    this.pulseMesh = pulseMesh;
+
+    const pulseParticles = pulseEdges.map((edge, idx) => ({
+      edge,
+      progress: (idx * 0.173) % 1.0,
+      speed: 0.0025 + (idx % 4) * 0.001
+    }));
+
     this.focusKey = null;
+    // edgeLinesGroup lets main.js toggle the whole link layer.
+    const edgeLinesGroup = new THREE.Group();
+    edgeLinesGroup.add(lines, pulseMesh);
+    this.scene.add(edgeLinesGroup);
     return { edgeLinesGroup, pulseParticles };
+  }
+
+  writeEdgeColor(colors, edge) {
+    const o = edge.index * 6;
+    const c = edge.baseColor;
+    const k = edge.level;
+    colors[o] = colors[o + 3] = c.r * k;
+    colors[o + 1] = colors[o + 4] = c.g * k;
+    colors[o + 2] = colors[o + 5] = c.b * k;
+  }
+
+  /** Copies endpoint positions into the merged line geometry (once per frame). */
+  updateEdgeGeometry(edges) {
+    if (!this.edgeLines) return;
+    const pos = this.edgeLines.geometry.attributes.position;
+    const arr = pos.array;
+    for (const e of edges) {
+      const o = e.index * 6;
+      const s = e.source.position, d = e.target.position;
+      const hidden = !e.source.meshGroup?.visible || !e.target.meshGroup?.visible;
+      if (hidden) {
+        arr[o] = arr[o + 3] = s.x; arr[o + 1] = arr[o + 4] = s.y; arr[o + 2] = arr[o + 5] = s.z;
+        continue;
+      }
+      arr[o] = s.x; arr[o + 1] = s.y; arr[o + 2] = s.z;
+      arr[o + 3] = d.x; arr[o + 4] = d.y; arr[o + 5] = d.z;
+    }
+    pos.needsUpdate = true;
+  }
+
+  updatePulses(pulseParticles, orbitSpeed) {
+    if (!this.pulseMesh) return;
+    const speedScale = Math.max(0.2, orbitSpeed);
+    const m = this._pm || (this._pm = new THREE.Matrix4());
+    const v = this._pv || (this._pv = new THREE.Vector3());
+    pulseParticles.forEach((p, i) => {
+      p.progress = (p.progress + p.speed * speedScale) % 1.0;
+      v.lerpVectors(p.edge.source.position, p.edge.target.position, p.progress);
+      // Pulses fade with their link when out of focus.
+      const s = Math.min(1, p.edge.level / p.edge.style.opacity) > 0.5 ? 1 : 0.35;
+      m.makeScale(s, s, s).setPosition(v);
+      this.pulseMesh.setMatrixAt(i, m);
+    });
+    this.pulseMesh.instanceMatrix.needsUpdate = true;
   }
 
   /**
@@ -301,23 +388,34 @@ export class CelestialFactory {
       });
     }
 
+    let trackColorsDirty = false;
+    const tmpColor = this._fc || (this._fc = new THREE.Color());
     for (const n of nodes) {
       if (n.focusLevel === undefined) n.focusLevel = 1;
       const target = n.focusTarget ?? 1;
       if (Math.abs(n.focusLevel - target) < 0.002) continue;
       n.focusLevel += (target - n.focusLevel) * FOCUS_LERP;
+      if (n.instanceIndex !== undefined && this.trackMesh) {
+        this.trackMesh.setColorAt(n.instanceIndex, tmpColor.copy(n.baseInstanceColor).multiplyScalar(n.focusLevel));
+        trackColorsDirty = true;
+      }
       n.fadeTargets?.forEach(({ material, baseOpacity, isUniform }) => {
         if (isUniform) material.uniforms.uOpacity.value = baseOpacity * n.focusLevel;
         else material.opacity = baseOpacity * n.focusLevel;
       });
     }
+    if (trackColorsDirty) this.trackMesh.instanceColor.needsUpdate = true;
+
+    if (!this.edgeLines) return;
+    const colors = this.edgeLines.geometry.attributes.color;
+    let edgesDirty = false;
     for (const e of edges) {
-      if (!e.lineMesh || e.focusTarget === undefined) continue;
-      const m = e.lineMesh.material;
-      if (Math.abs(m.opacity - e.focusTarget) < 0.002) continue;
-      m.opacity += (e.focusTarget - m.opacity) * FOCUS_LERP;
-      if (e.pulseMesh) e.pulseMesh.material.opacity = Math.min(1, m.opacity * 2.2);
+      if (e.focusTarget === undefined || Math.abs(e.level - e.focusTarget) < 0.002) continue;
+      e.level += (e.focusTarget - e.level) * FOCUS_LERP;
+      this.writeEdgeColor(colors.array, e);
+      edgesDirty = true;
     }
+    if (edgesDirty) colors.needsUpdate = true;
   }
 
   updateSolarShaders(time) {

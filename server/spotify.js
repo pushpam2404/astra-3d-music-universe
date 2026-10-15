@@ -44,7 +44,8 @@ async function tokenRequest(form) {
     accessToken: data.access_token,
     // Spotify only sometimes rotates the refresh token.
     refreshToken: data.refresh_token,
-    expiresAt: Date.now() + data.expires_in * 1000
+    expiresAt: Date.now() + data.expires_in * 1000,
+    scope: data.scope
   };
 }
 
@@ -65,7 +66,8 @@ export function createApi(session, onTokensRefreshed) {
     session = {
       accessToken: fresh.accessToken,
       refreshToken: fresh.refreshToken || session.refreshToken,
-      expiresAt: fresh.expiresAt
+      expiresAt: fresh.expiresAt,
+      scope: fresh.scope || session.scope
     };
     onTokensRefreshed(session);
     return session.accessToken;

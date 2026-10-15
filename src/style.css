@@ -178,56 +178,6 @@ body, html {
   gap: 14px;
 }
 
-.preset-dropdown-wrap select {
-  background: rgba(20, 20, 42, 0.8);
-  color: var(--text-main);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 600;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.2s;
-}
-
-.preset-dropdown-wrap select:hover,
-.preset-dropdown-wrap select:focus {
-  border-color: var(--neon-cyan);
-}
-
-.time-range-group {
-  display: flex;
-  background: rgba(14, 14, 28, 0.7);
-  border-radius: 8px;
-  padding: 3px;
-  border: 1px solid var(--border-subtle);
-}
-
-.time-range-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  padding: 5px 11px;
-  border-radius: 6px;
-  font-family: var(--font-display);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.time-range-btn:hover {
-  color: var(--text-main);
-}
-
-.time-range-btn.active {
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
 /* Search Bar with Dropdown */
 .search-container {
   position: relative;
@@ -1093,4 +1043,10 @@ body, html {
   #cluster-legend {
     display: none;
   }
+}
+
+/* Off-screen panels (closed inspector) must never make the page scrollable, even via focus. */
+html,
+body {
+  overflow: clip;
 }

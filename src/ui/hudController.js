@@ -7,8 +7,6 @@ export class HudController {
     this.state = appState;
     this.cb = callbacks;
 
-    this.initPresetButtons();
-    this.initTimeRangeButtons();
     this.initSearch();
     this.initLayerToggles();
     this.initPhysicsControls();
@@ -16,28 +14,6 @@ export class HudController {
     this.initCinemaRecorder();
     this.initTimeMachine();
     this.initModals();
-  }
-
-  initPresetButtons() {
-    const presetSelect = document.getElementById('galaxy-preset-select');
-    if (presetSelect) {
-      presetSelect.addEventListener('change', (e) => {
-        this.cb.onLoadPreset(e.target.value);
-      });
-    }
-  }
-
-  initTimeRangeButtons() {
-    const buttons = document.querySelectorAll('.time-range-btn');
-    buttons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        buttons.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const range = btn.dataset.range;
-        this.state.timeRange = range;
-        this.cb.onTimeRangeChange(range);
-      });
-    });
   }
 
   initSearch() {
@@ -251,6 +227,11 @@ export class HudController {
 
     if (openSpotifyModalBtn && spotifyModal) {
       openSpotifyModalBtn.addEventListener('click', async () => {
+        if (this.needsReconnect()) {
+          // Logging in again grants the newly required scopes.
+          window.location.href = SPOTIFY_LOGIN_URL;
+          return;
+        }
         if (this.state.spotifyConnected) {
           if (confirm('You are currently connected to Spotify. Disconnect?')) {
             await logout().catch(err => console.warn('Logout failed:', err));
@@ -374,10 +355,14 @@ export class HudController {
     this.setSpotifyConnected(status.loggedIn);
   }
 
+  needsReconnect() {
+    return Boolean(this.state.spotifyConnected && this.authStatus?.missingScopes?.length);
+  }
+
   setSpotifyConnected(connected) {
     this.state.spotifyConnected = connected;
     const btn = document.getElementById('open-spotify-modal-btn');
-    if (btn) btn.textContent = connected ? 'SPOTIFY CONNECTED' : 'CONNECT SPOTIFY';
+    if (btn) btn.textContent = !connected ? 'CONNECT SPOTIFY' : (this.needsReconnect() ? 'RECONNECT SPOTIFY' : 'SPOTIFY CONNECTED');
   }
 
   showCollisionBanner(metrics) {

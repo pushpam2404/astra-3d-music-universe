@@ -8,7 +8,9 @@
 
 const MB_BASE = 'https://musicbrainz.org/ws/2';
 const USER_AGENT = 'ASTRA-music-universe/1.0 ( https://astra-3d-music-universe.vercel.app )';
-const TIMEOUT_MS = 10000;
+const TIMEOUT_MS = 30000;
+// MusicBrainz accepts up to 100 URL resources per lookup.
+const CHUNK_SIZE = 100;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TAGS = 5;
 
@@ -106,7 +108,12 @@ export async function fetchMusicBrainzArtistMeta(spotifyIds) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const found = await queryMusicBrainz(missing.slice(0, 100), controller.signal);
+    const found = new Map();
+    for (let i = 0; i < missing.length; i += CHUNK_SIZE) {
+      if (i > 0) await sleep(1100);
+      const part = await queryMusicBrainz(missing.slice(i, i + CHUNK_SIZE), controller.signal);
+      part.forEach((v, k) => found.set(k, v));
+    }
     missing.forEach(id => {
       const meta = found.get(id) || null;
       cache.set(id, { meta, fetchedAt: now });

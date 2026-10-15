@@ -1,13 +1,15 @@
 // server/universeBuilder.js
 /**
- * Builds the raw { genres, artists, tracks } dataset consumed by the frontend's
- * buildUniverseGraph() from a user's Spotify top items.
+ * Builds ONE universe of everything we can see of the user's listening: top artists and
+ * top tracks across all three time ranges, recently played tracks, and Liked Songs.
+ * Output is the raw { genres, artists, tracks } dataset consumed by buildUniverseGraph().
  *
  * Constraints of the Spotify Web API (Development Mode, 2026):
- *  - GET /artists?ids= (batch) was removed, so missing artists are fetched one by one.
+ *  - GET /artists?ids= (batch) was removed. Artist genres come back empty anyway, so
+ *    track artists are used as-is (simplified objects) instead of being fetched.
+ *  - Genres, country and occupation come from Wikidata and MusicBrainz (both matched
+ *    by exact Spotify artist id).
  *  - Artist followers/popularity and track popularity were removed.
- *  - Artist genres come back empty, so genres, country and occupation come from
- *    Wikidata and MusicBrainz (both matched by exact Spotify artist id).
  *  - Audio features are unavailable to new apps, so features are derived
  *    deterministically from the Spotify id (stable across reloads, not real).
  */
@@ -16,14 +18,15 @@ import { fetchWikidataArtistMeta } from './genreEnrichment.js';
 import { fetchMusicBrainzArtistMeta } from './musicbrainz.js';
 import { clusterArtists } from './clustering.js';
 
-const MAX_TOP_ARTISTS = 30;
-const MAX_TRACKS = 40;
-const MAX_INDIVIDUAL_ARTIST_FETCHES = 40;
-const ARTIST_FETCH_CONCURRENCY = 4;
-const ARTIST_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const PAGE_SIZE = 50;
+const MAX_TOP_ITEMS_PER_RANGE = 200;
+const MAX_SAVED_TRACKS = 5000;
+const PAGE_CONCURRENCY = 4;
 
-// Artist objects are not user-specific, so cache them across sessions.
-const artistCache = new Map();
+// Longer horizons say more about lasting taste.
+const RANGE_WEIGHTS = { short_term: 1.0, medium_term: 1.2, long_term: 1.5 };
+const RECENT_PLAY_SCORE = 250;
+const SAVED_TRACK_SCORE = 120;
 
 function hashUnit(str, salt) {
   let h = 2166136261;
@@ -58,71 +61,88 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-async function fetchArtist(api, id) {
-  const cached = artistCache.get(id);
-  if (cached && Date.now() - cached.fetchedAt < ARTIST_CACHE_TTL_MS) return cached.artist;
-  const artist = await api.get(`/artists/${id}`);
-  artistCache.set(id, { artist, fetchedAt: Date.now() });
-  return artist;
+/** Fetches every page of a paged endpoint (up to `cap` items), pages in parallel. */
+async function fetchAllPages(api, path, cap) {
+  const sep = path.includes('?') ? '&' : '?';
+  const first = await api.get(`${path}${sep}limit=${PAGE_SIZE}&offset=0`);
+  const total = Math.min(first.total ?? first.items.length, cap);
+  const offsets = [];
+  for (let o = PAGE_SIZE; o < total; o += PAGE_SIZE) offsets.push(o);
+  const pages = await mapWithConcurrency(offsets, PAGE_CONCURRENCY, (o) => api.get(`${path}${sep}limit=${PAGE_SIZE}&offset=${o}`));
+  return [first, ...pages].flatMap(p => p.items || []).slice(0, cap);
 }
 
-export async function buildUniverseDataset(api, timeRange) {
-  const diagnostics = { timeRange, warnings: [] };
+/** Runs a source, turning failures into a diagnostics warning instead of failing the universe. */
+async function optionalSource(diagnostics, label, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    const hint = err.status === 403 || err.status === 401 ? ' Reconnect Spotify to grant access.' : '';
+    diagnostics.warnings.push(`Could not load ${label} (${err.status || ''} ${err.message}).${hint}`);
+    return [];
+  }
+}
 
-  const [topArtistsRes, topTracksRes] = await Promise.all([
-    api.get(`/me/top/artists?limit=${MAX_TOP_ARTISTS}&time_range=${timeRange}`),
-    api.get(`/me/top/tracks?limit=50&time_range=${timeRange}`)
+export async function buildUniverseDataset(api) {
+  const diagnostics = { warnings: [] };
+  const ranges = Object.keys(RANGE_WEIGHTS);
+
+  // 1. Gather every listening signal in parallel.
+  const [topArtistsByRange, topTracksByRange, recent, saved] = await Promise.all([
+    Promise.all(ranges.map(r => fetchAllPages(api, `/me/top/artists?time_range=${r}`, MAX_TOP_ITEMS_PER_RANGE))),
+    Promise.all(ranges.map(r => fetchAllPages(api, `/me/top/tracks?time_range=${r}`, MAX_TOP_ITEMS_PER_RANGE))),
+    optionalSource(diagnostics, 'recently played tracks', async () =>
+      (await api.get('/me/player/recently-played?limit=50')).items || []),
+    optionalSource(diagnostics, 'Liked Songs', () => fetchAllPages(api, '/me/tracks', MAX_SAVED_TRACKS))
   ]);
-  const topArtists = topArtistsRes.items || [];
-  const topTracks = (topTracksRes.items || []).slice(0, MAX_TRACKS);
-  diagnostics.topArtists = topArtists.length;
-  diagnostics.topTracks = topTracks.length;
+  diagnostics.sources = {
+    topArtists: topArtistsByRange.map(l => l.length).join('/'),
+    topTracks: topTracksByRange.map(l => l.length).join('/'),
+    recentlyPlayed: recent.length,
+    likedSongs: saved.length
+  };
 
-  if (topArtists.length === 0 && topTracks.length === 0) {
-    diagnostics.warnings.push(`Spotify returned no top artists or tracks for "${timeRange}". Try a longer time range.`);
+  // 2. Score tracks and artists across all sources.
+  const tracksById = new Map();
+  const trackScore = new Map();
+  const addTrack = (t, score) => {
+    if (!t || !t.id || t.is_local || !t.artists?.length) return;
+    tracksById.set(t.id, t);
+    trackScore.set(t.id, (trackScore.get(t.id) || 0) + score);
+  };
+  topTracksByRange.forEach((list, ri) => {
+    const w = RANGE_WEIGHTS[ranges[ri]];
+    list.forEach((t, rank) => addTrack(t, w * 1400 * Math.pow(0.97, rank)));
+  });
+  recent.forEach(item => addTrack(item.track, RECENT_PLAY_SCORE));
+  saved.forEach(item => addTrack(item.track, SAVED_TRACK_SCORE));
+
+  const artistsById = new Map();
+  const artistScore = new Map();
+  const addArtistScore = (id, s) => artistScore.set(id, (artistScore.get(id) || 0) + s);
+  topArtistsByRange.forEach((list, ri) => {
+    const w = RANGE_WEIGHTS[ranges[ri]];
+    list.forEach((a, rank) => {
+      artistsById.set(a.id, a); // full objects (images, urls)
+      addArtistScore(a.id, w * 3000 * Math.pow(0.96, rank));
+    });
+  });
+  tracksById.forEach((t, id) => {
+    const s = trackScore.get(id);
+    t.artists.forEach((a, credit) => {
+      if (!artistsById.has(a.id)) artistsById.set(a.id, { ...a, genres: [] });
+      addArtistScore(a.id, credit === 0 ? s * 0.5 : s * 0.2);
+    });
+  });
+
+  if (tracksById.size === 0 && artistsById.size === 0) {
+    diagnostics.warnings.push('Spotify returned no listening data for this account yet.');
     return { dataset: null, diagnostics };
   }
 
-  // 1. Score artists: rank in top artists + contribution from top tracks.
-  const artistsById = new Map();
-  const artistScore = new Map();
-  const addScore = (id, s) => artistScore.set(id, (artistScore.get(id) || 0) + s);
-
-  topArtists.forEach((a, idx) => {
-    artistsById.set(a.id, a);
-    addScore(a.id, Math.round(3000 * Math.pow(0.92, idx)));
-  });
-
-  const trackBase = topTracks.map((_, idx) => Math.round(1400 * Math.pow(0.95, idx)));
-  topTracks.forEach((t, idx) => {
-    t.artists.forEach((a, credit) => addScore(a.id, credit === 0 ? trackBase[idx] * 0.5 : trackBase[idx] * 0.2));
-  });
-
-  // 2. Every track's primary artist must exist as a planet, so fetch missing ones individually.
-  const missingPrimaryIds = [...new Set(topTracks.map(t => t.artists[0]?.id).filter(id => id && !artistsById.has(id)))];
-  const toFetch = missingPrimaryIds.slice(0, MAX_INDIVIDUAL_ARTIST_FETCHES);
-  let fetchFailures = 0;
-  await mapWithConcurrency(toFetch, ARTIST_FETCH_CONCURRENCY, async (id) => {
-    try {
-      artistsById.set(id, await fetchArtist(api, id));
-    } catch (err) {
-      fetchFailures++;
-      // Fall back to the simplified artist object embedded in the track.
-      const simplified = topTracks.flatMap(t => t.artists).find(a => a.id === id);
-      if (simplified) artistsById.set(id, { ...simplified, genres: [] });
-    }
-  });
-  diagnostics.artistsFetchedIndividually = toFetch.length;
-  diagnostics.artistFetchFailures = fetchFailures;
-  if (fetchFailures > 0) {
-    diagnostics.warnings.push(`${fetchFailures} artist lookups failed; those artists have no genre data.`);
-  }
-
-  // Included artists: top artists plus every primary track artist.
-  const primaryIds = new Set(topTracks.map(t => t.artists[0]?.id).filter(Boolean));
-  const includedArtists = [...artistsById.values()].filter(a =>
-    topArtists.some(t => t.id === a.id) || primaryIds.has(a.id)
-  );
+  // Every artist we know of is a planet: top artists plus all credited track artists.
+  const includedArtists = [...artistsById.values()];
+  const topTracks = [...tracksById.values()].sort((x, y) => trackScore.get(y.id) - trackScore.get(x.id));
 
   // 3. Genres: Spotify's own when present (empty for Dev Mode apps), otherwise the union of
   //    Wikidata genres and MusicBrainz tags. Country (MusicBrainz first, it is cleaner) and
@@ -207,16 +227,15 @@ export async function buildUniverseDataset(api, timeRange) {
   // 5. Track satellites; every track now has its primary artist in the graph.
   const includedIds = new Set(artists.map(a => a.id));
   const tracks = topTracks
-    .map((t, idx) => ({ t, idx }))
-    .filter(({ t }) => includedIds.has(t.artists[0]?.id))
-    .map(({ t, idx }) => {
+    .filter(t => includedIds.has(t.artists[0]?.id))
+    .map(t => {
       const feat = t.artists.slice(1).find(a => includedIds.has(a.id));
       return {
         id: t.id,
         name: t.name,
         artistId: t.artists[0].id,
         featArtistId: feat ? feat.id : null,
-        basePlays: trackBase[idx],
+        basePlays: Math.max(1, Math.round(trackScore.get(t.id))),
         ...estimatedFeatures(t.id),
         durationMin: Number((t.duration_ms / 60000).toFixed(1)),
         spotifyUrl: t.external_urls?.spotify,
@@ -225,13 +244,12 @@ export async function buildUniverseDataset(api, timeRange) {
       };
     });
   diagnostics.tracks = tracks.length;
-  diagnostics.droppedTracks = topTracks.length - tracks.length;
 
   return {
     dataset: {
-      id: `spotify_${timeRange}`,
-      name: 'Live Spotify Universe',
-      description: `Synced live with your Spotify taste (${timeRange.replace('_', ' ')}).`,
+      id: 'spotify_universe',
+      name: 'Your Music Universe',
+      description: `${artists.length} artists and ${tracks.length} tracks from your top charts, recent plays and Liked Songs.`,
       genres,
       artists,
       tracks

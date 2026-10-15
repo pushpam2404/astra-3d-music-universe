@@ -23,27 +23,64 @@ export class LabelProjector {
   syncLabels(nodes, onLabelClick) {
     this.container.innerHTML = '';
     this.labelPool.clear();
-
+    this.onLabelClick = onLabelClick;
+    // Track labels are created lazily: a big library has thousands of them and only a
+    // focused artist's moons are ever shown.
     nodes.forEach(node => {
-      const el = document.createElement('div');
-      el.className = `celestial-hud-label label-${node.type}`;
-      if (node.isWormholeBridge) el.classList.add('label-wormhole');
-      if (node.isBridge) el.classList.add('label-bridge');
-
-      const count = node.type === 'genre' ? `<span class="label-count">${node.neighbors?.size || 0}</span>` : '';
-      el.innerHTML = `<span class="label-dot" style="background:${node.color}"></span><span class="label-text">${escapeHtml(node.name)}</span>${count}`;
-      el.style.opacity = '0';
-
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (onLabelClick) onLabelClick(node);
-      });
-
-      this.container.appendChild(el);
-      this.labelPool.set(node.id, el);
-      node.labelEl = el;
+      node.labelEl = null;
       node.labelSize = null;
+      if (node.type !== 'track') this.ensureLabel(node);
     });
+  }
+
+  ensureLabel(node) {
+    let el = this.labelPool.get(node.id);
+    if (el) return el;
+    el = document.createElement('div');
+    el.className = `celestial-hud-label label-${node.type}`;
+    if (node.isWormholeBridge) el.classList.add('label-wormhole');
+    if (node.isBridge) el.classList.add('label-bridge');
+
+    const count = node.type === 'genre' ? `<span class="label-count">${node.neighbors?.size || 0}</span>` : '';
+    el.innerHTML = `<span class="label-dot" style="background:${node.color}"></span><span class="label-text">${escapeHtml(node.name)}</span>${count}`;
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+    el._shown = false;
+
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.onLabelClick) this.onLabelClick(node);
+    });
+
+    this.container.appendChild(el);
+    this.labelPool.set(node.id, el);
+    node.labelEl = el;
+    return el;
+  }
+
+  /** Writes to the DOM only when something changed. */
+  hide(el) {
+    if (!el || !el._shown) return;
+    el._shown = false;
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+  }
+
+  show(el, transform, opacity, focused) {
+    if (el._transform !== transform) {
+      el._transform = transform;
+      el.style.transform = transform;
+    }
+    if (!el._shown || el._opacity !== opacity) {
+      el._opacity = opacity;
+      el.style.opacity = opacity;
+    }
+    if (!el._shown) el.style.pointerEvents = 'auto';
+    el._shown = true;
+    if (el._focused !== focused) {
+      el._focused = focused;
+      el.classList.toggle('focused', focused);
+    }
   }
 
   priorityOf(node, activeNode) {
@@ -71,12 +108,9 @@ export class LabelProjector {
     const candidates = [];
 
     for (const node of nodes) {
-      const el = this.labelPool.get(node.id);
-      if (!el) continue;
       const priority = (node.meshGroup && !node.meshGroup.visible) ? -1 : this.priorityOf(node, activeNode);
       if (priority < 0) {
-        el.style.opacity = '0';
-        el.style.pointerEvents = 'none';
+        this.hide(this.labelPool.get(node.id));
         continue;
       }
 
@@ -84,13 +118,12 @@ export class LabelProjector {
       tempProjVec.y += (node.currentRadius || node.baseRadius || 5) * scaleMultiplier + 1.5;
       tempProjVec.project(camera);
       if (tempProjVec.z > 1 || tempProjVec.z < -1 || Math.abs(tempProjVec.x) > 1.1 || Math.abs(tempProjVec.y) > 1.1) {
-        el.style.opacity = '0';
-        el.style.pointerEvents = 'none';
+        this.hide(this.labelPool.get(node.id));
         continue;
       }
 
       candidates.push({
-        node, el, priority,
+        node, el: this.ensureLabel(node), priority,
         x: (tempProjVec.x * 0.5 + 0.5) * w,
         y: (-tempProjVec.y * 0.5 + 0.5) * h,
         depth: tempProjVec.z
@@ -110,17 +143,14 @@ export class LabelProjector {
       const rect = { x0: c.x - lw / 2 - LABEL_PADDING, x1: c.x + lw / 2 + LABEL_PADDING, y0: c.y - lh - LABEL_PADDING, y1: c.y + LABEL_PADDING };
       const blocked = c.priority > 0 && this.placed.some(r => rect.x0 < r.x1 && rect.x1 > r.x0 && rect.y0 < r.y1 && rect.y1 > r.y0);
       if (blocked) {
-        c.el.style.opacity = '0';
-        c.el.style.pointerEvents = 'none';
+        this.hide(c.el);
         continue;
       }
       this.placed.push(rect);
 
       const focused = activeNode && (c.priority <= 2);
-      c.el.style.transform = `translate(-50%, -100%) translate3d(${c.x.toFixed(1)}px, ${c.y.toFixed(1)}px, 0)`;
-      c.el.style.opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.8'));
-      c.el.style.pointerEvents = 'auto';
-      c.el.classList.toggle('focused', c.priority === 0);
+      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.8'));
+      this.show(c.el, `translate(-50%, -100%) translate3d(${c.x.toFixed(0)}px, ${c.y.toFixed(0)}px, 0)`, opacity, c.priority === 0);
     }
   }
 }

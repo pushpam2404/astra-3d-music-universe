@@ -19,7 +19,6 @@ import { CosmicCinemaDirector } from './ui/cinemaExporter.js';
 // Master Global State Store (Blueprint 01)
 const AppState = {
   activePreset: 'cosmic_synth',
-  timeRange: 'medium_term',
   layoutMode: 'force',
   orbitSpeedMultiplier: 1.0,
   nodeScaleMultiplier: 1.0,
@@ -98,11 +97,9 @@ async function initApp() {
   function getIntersectedNode() {
     raycaster.setFromCamera(mouse, camera);
     const meshes = AppState.nodes.map(n => n.sphereMesh).filter(Boolean);
-    const intersects = raycaster.intersectObjects(meshes, false);
-    if (intersects.length > 0) {
-      return intersects[0].object.userData.node;
-    }
-    return null;
+    if (factory.trackMesh && AppState.layers.tracks) meshes.push(factory.trackMesh);
+    const hit = raycaster.intersectObjects(meshes, false)[0];
+    return hit ? factory.nodeFromHit(hit) : null;
   }
 
   function handleRaycastClick(e) {
@@ -142,6 +139,7 @@ async function initApp() {
     }
     AppState.pulseParticles = [];
     factory.solarMaterials = [];
+    factory.disposeBatches();
 
     // Normalize graph
     const graphData = buildUniverseGraph(rawDataset, timeMultiplier);
@@ -153,16 +151,12 @@ async function initApp() {
     physics.initializeNodePositions(AppState.nodes);
     cameraController.setSceneRadius(physics.boundingRadius);
 
-    // Build 3D meshes for each tier
+    // Build 3D meshes: suns and planets individually, all tracks as one instanced batch
     AppState.nodes.forEach(node => {
-      if (node.type === 'genre') {
-        factory.buildGenreSun(node);
-      } else if (node.type === 'artist') {
-        factory.buildArtistPlanet(node);
-      } else if (node.type === 'track') {
-        factory.buildTrackSatellite(node);
-      }
+      if (node.type === 'genre') factory.buildGenreSun(node);
+      else if (node.type === 'artist') factory.buildArtistPlanet(node);
     });
+    factory.buildTrackSatellites(AppState.nodes.filter(n => n.type === 'track'));
 
     // Build synaptic edge network
     const edgeData = factory.buildEdgeVisuals(AppState.edges);
@@ -205,17 +199,6 @@ async function initApp() {
       timeMachine = new TemporalUniverseScrubber();
       loadDataset(dataset);
       cameraController.resetOverview();
-    },
-
-    onTimeRangeChange: async (range) => {
-      if (AppState.activePreset === 'live_spotify') {
-        await loadLiveSpotify(range);
-      } else {
-        // Multiplier fallback for presets
-        const mult = range === 'short_term' ? 0.6 : (range === 'long_term' ? 1.7 : 1.0);
-        const preset = GALAXY_PRESETS[AppState.activePreset] || GALAXY_PRESETS.cosmic_synth;
-        loadDataset(preset, mult);
-      }
     },
 
     onSelectNode: (node) => selectNode(node),
@@ -309,12 +292,12 @@ async function initApp() {
 
   // Loads the user's live universe from the backend. Returns true on success;
   // on failure, keeps whatever is currently rendered and shows the reason.
-  async function loadLiveSpotify(range) {
+  async function loadLiveSpotify() {
     const titleEl = document.getElementById('galaxy-title-text');
     if (titleEl) titleEl.textContent = 'Charting your universe…';
-    showNotice('Reading your Spotify taste and mapping artists into clusters.', false);
+    showNotice('Reading your top charts, recent plays and Liked Songs, then mapping every artist into clusters.', false);
     try {
-      const { dataset, diagnostics } = await fetchUniverse(range);
+      const { dataset, diagnostics } = await fetchUniverse();
       console.info('[ASTRA] Spotify universe diagnostics:', diagnostics);
       if (!dataset) {
         if (titleEl) titleEl.textContent = 'Nothing to chart yet';
@@ -324,7 +307,11 @@ async function initApp() {
       AppState.activePreset = 'live_spotify';
       loadDataset(dataset);
       cameraController.resetOverview();
-      if (diagnostics.warnings.length) showNotice(diagnostics.warnings.join(' '));
+      const notes = [...diagnostics.warnings];
+      if (authStatus.missingScopes?.includes('user-library-read')) {
+        notes.push('Reconnect Spotify (top right) to add your Liked Songs to the universe.');
+      }
+      if (notes.length) showNotice(notes.join(' '));
       return true;
     } catch (err) {
       console.error('Failed to load Spotify universe:', err);
@@ -339,18 +326,33 @@ async function initApp() {
   const authError = new URLSearchParams(window.location.search).get('auth_error');
   if (authError) window.history.replaceState({}, document.title, window.location.pathname);
 
-  loadDataset(GALAXY_PRESETS.cosmic_synth);
-  cameraController.resetOverview();
+  function loadDemo(notice) {
+    AppState.activePreset = 'cosmic_synth';
+    loadDataset(GALAXY_PRESETS.cosmic_synth);
+    cameraController.resetOverview();
+    const titleEl = document.getElementById('galaxy-title-text');
+    if (titleEl) titleEl.textContent = 'Demo Universe';
+    showNotice(notice, false);
+  }
+
   const authStatus = await getAuthStatus();
   hud.setAuthStatus(authStatus);
-  if (authError) {
-    showNotice(`Spotify login failed: ${authError}`);
-  } else if (authStatus.loggedIn) {
-    await loadLiveSpotify(AppState.timeRange);
+  if (authStatus.loggedIn && !authError) {
+    if (!(await loadLiveSpotify())) {
+      // Keep the error notice; show something behind it.
+      const descEl = document.getElementById('galaxy-desc-text');
+      const reason = descEl?.textContent;
+      loadDemo('');
+      showNotice(reason?.replace(/^⚠ /, '') || 'Could not load your universe.');
+    }
+  } else {
+    loadDemo('A demo universe. Connect Spotify to chart your own music.');
+    if (authError) showNotice(`Spotify login failed: ${authError}`);
   }
 
   // 8. Master Animation & Render Loop (60 FPS)
   let lastTime = performance.now();
+  let frameCount = 0;
 
   function animate(now) {
     requestAnimationFrame(animate);
@@ -361,8 +363,9 @@ async function initApp() {
 
     // 1. Step 3D Physics Engine
     physics.step(AppState.nodes, delta);
-    physics.updateEdgeLines(AppState.edges);
-    physics.updateSynapticPulses(AppState.pulseParticles, physics.orbitMultiplier);
+    factory.updateTrackInstances();
+    factory.updateEdgeGeometry(AppState.edges);
+    factory.updatePulses(AppState.pulseParticles, physics.orbitMultiplier);
 
     // 2. Update GLSL Solar Plasma Noise Shaders and focus dimming
     factory.updateSolarShaders(timeSec);
@@ -375,11 +378,13 @@ async function initApp() {
       cameraController.update(AppState.selectedNode, now);
     }
 
-    // 4. Update Hovered Node Highlight Cursor
-    const hovered = getIntersectedNode();
-    if (hovered !== AppState.hoveredNode) {
-      AppState.hoveredNode = hovered;
-      document.body.style.cursor = hovered ? 'pointer' : 'default';
+    // 4. Update Hovered Node Highlight Cursor (every 3rd frame; raycasting thousands of moons isn't free)
+    if (frameCount++ % 3 === 0) {
+      const hovered = getIntersectedNode();
+      if (hovered !== AppState.hoveredNode) {
+        AppState.hoveredNode = hovered;
+        document.body.style.cursor = hovered ? 'pointer' : 'default';
+      }
     }
 
     // 5. Update Frustum Projected 2D HTML Labels
@@ -399,6 +404,9 @@ async function initApp() {
   }
 
   requestAnimationFrame(animate);
+
+  // Dev-only hook for loading arbitrary datasets from the console.
+  if (import.meta.env.DEV) window.__astra = { loadDataset, AppState };
 }
 
 // Boot application when DOM is ready

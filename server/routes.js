@@ -1,20 +1,23 @@
 // server/routes.js
 import crypto from 'node:crypto';
 import express from 'express';
-import { isSpotifyConfigured, getRedirectUri } from './config.js';
+import { isSpotifyConfigured, getRedirectUri, REQUIRED_SCOPES } from './config.js';
 import { getSession, saveSession, destroySession, parseCookies, setCookie } from './sessions.js';
 import { buildAuthorizeUrl, exchangeCode, createApi, SpotifyError } from './spotify.js';
 import { buildUniverseDataset } from './universeBuilder.js';
 
 const STATE_COOKIE = 'astra_oauth_state';
-const TIME_RANGES = new Set(['short_term', 'medium_term', 'long_term']);
 
 export const apiRouter = express.Router();
 
 apiRouter.get('/auth/status', (req, res) => {
+  const session = getSession(req);
+  const granted = new Set((session?.scope || '').split(' '));
   res.json({
     configured: isSpotifyConfigured(),
-    loggedIn: Boolean(getSession(req)),
+    loggedIn: Boolean(session),
+    // Sessions from before a scope was added need a fresh login to grant it.
+    missingScopes: session ? REQUIRED_SCOPES.filter(s => !granted.has(s)) : [],
     redirectUri: getRedirectUri(req)
   });
 });
@@ -55,9 +58,8 @@ apiRouter.get('/universe', async (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Not connected to Spotify.' });
 
-  const timeRange = TIME_RANGES.has(req.query.time_range) ? req.query.time_range : 'medium_term';
   try {
-    const result = await buildUniverseDataset(createApi(session, (s) => saveSession(req, res, s)), timeRange);
+    const result = await buildUniverseDataset(createApi(session, (s) => saveSession(req, res, s)));
     console.log('[universe]', JSON.stringify(result.diagnostics));
     res.json(result);
   } catch (err) {

@@ -47,9 +47,13 @@ export class CameraFlightController {
   }
 
   resetOverview() {
+    // Distance at which a sphere of radius R fits the narrower field of view, plus margin.
     const R = this.sceneRadius || 200;
+    const vFov = THREE.MathUtils.degToRad(this.camera.fov);
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
+    const dist = (R / Math.sin(Math.min(vFov, hFov) / 2)) * 0.82;
     this.targetLookAt.set(0, 0, 0);
-    this.targetCameraPos.set(0, R * 0.7, R * 1.15);
+    this.targetCameraPos.set(0, dist * 0.55, dist * 0.835);
     this.active = true;
     if (this.onWarpChange) this.onWarpChange(0.6);
   }

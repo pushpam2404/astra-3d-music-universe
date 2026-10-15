@@ -25,9 +25,9 @@ export async function getAuthStatus() {
   }
 }
 
-/** Resolves to { dataset, diagnostics }; dataset is null when Spotify has no data for the range. */
-export function fetchUniverse(timeRange) {
-  return requestJson(`/api/universe?time_range=${encodeURIComponent(timeRange)}`);
+/** Resolves to { dataset, diagnostics }; dataset is null when Spotify has no data yet. */
+export function fetchUniverse() {
+  return requestJson('/api/universe');
 }
 
 export function logout() {

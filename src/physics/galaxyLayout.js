@@ -106,19 +106,32 @@ export class GalaxyLayoutEngine {
       return sharedCount.get([s.id, t.id].sort().join('|')) || 0;
     };
 
+    // Moon systems first: an artist with many tracks needs more room in its disc.
+    const tracksByArtist = new Map();
+    tracks.forEach(t => {
+      if (!tracksByArtist.has(t.artistId)) tracksByArtist.set(t.artistId, []);
+      tracksByArtist.get(t.artistId).push(t);
+    });
+    artists.forEach(a => {
+      const count = tracksByArtist.get(a.id)?.length || 0;
+      a.systemRadius = a.baseRadius + C.moonInnerGap + (count ? C.moonSpacing * Math.sqrt(count) * 1.6 : 0);
+    });
+
     // Disc geometry per sun.
     suns.forEach(sun => {
       const members = discMembers.get(sun.id).sort((a, b) => b.plays - a.plays);
       const bridgeCount = bridges.filter(b => b.primarySunId === sun.id || b.secondarySunId === sun.id).length;
+      const meanSystem = members.length ? members.reduce((s, a) => s + a.systemRadius, 0) / members.length : 0;
+      const spacing = Math.max(C.discSpacing, meanSystem * 1.7);
       const core = sun.baseRadius * C.sunCoreFactor + C.discInnerGap;
       sun.discCore = core;
-      sun.clusterRadius = core + C.discSpacing * Math.sqrt(members.length + 0.5) + C.discMargin;
+      sun.clusterRadius = core + spacing * Math.sqrt(members.length + 0.5) + C.discMargin;
       sun.clusterSize = members.length + bridgeCount;
       sun.discTilt = (hash01(sun.id) - 0.5) * C.discTiltRange;
       sun.discSpin = (hash01(`${sun.id}:spin`) > 0.5 ? 1 : -1);
       members.forEach((a, k) => {
         a.labelRank = k;
-        a.discRadius = core + C.discSpacing * Math.sqrt(k + 0.5);
+        a.discRadius = core + spacing * Math.sqrt(k + 0.5);
         a.discAngle = k * GOLDEN_ANGLE;
         a.discHeight = (hash01(`${a.id}:h`) - 0.5) * C.discThickness;
         a.isBridge = false;
@@ -181,19 +194,14 @@ export class GalaxyLayoutEngine {
       });
     });
 
-    // Moons.
-    const tracksByArtist = new Map();
-    tracks.forEach(t => {
-      if (!tracksByArtist.has(t.artistId)) tracksByArtist.set(t.artistId, []);
-      tracksByArtist.get(t.artistId).push(t);
-    });
+    // Moons: sqrt spacing keeps big moon systems compact (a belt rather than rings to infinity).
     tracksByArtist.forEach((list, artistId) => {
       const parent = artistById.get(artistId);
       list.sort((x, y) => y.plays - x.plays).forEach((t, k) => {
         t.parentNode = parent || null;
-        t.moonRadius = (parent?.baseRadius || 3) + C.moonInnerGap + k * C.moonSpacing;
+        t.moonRadius = (parent?.baseRadius || 3) + C.moonInnerGap + C.moonSpacing * Math.sqrt(k) * 1.6;
         t.moonPhase = (k / list.length) * Math.PI * 2 + hash01(t.id) * 0.6;
-        t.moonSpeed = C.moonSpeed / (1 + k * 0.18);
+        t.moonSpeed = C.moonSpeed / (1 + Math.sqrt(k) * 0.35);
         t.moonInclination = (hash01(`${t.id}:inc`) - 0.5) * C.moonInclinationRange;
         t.moonNode = hash01(`${t.id}:node`) * Math.PI * 2;
       });
@@ -283,26 +291,5 @@ export class GalaxyLayoutEngine {
         if (n.meshGroup) n.meshGroup.position.copy(n.position);
       });
     });
-  }
-
-  updateEdgeLines(edges) {
-    for (let i = 0; i < edges.length; i++) {
-      const edge = edges[i];
-      if (!edge.lineMesh) continue;
-      const positions = edge.lineMesh.geometry.attributes.position.array;
-      const s = edge.source.position, d = edge.target.position;
-      positions[0] = s.x; positions[1] = s.y; positions[2] = s.z;
-      positions[3] = d.x; positions[4] = d.y; positions[5] = d.z;
-      edge.lineMesh.geometry.attributes.position.needsUpdate = true;
-    }
-  }
-
-  updateSynapticPulses(pulseParticles, orbitSpeed) {
-    const speedScale = Math.max(0.2, orbitSpeed);
-    for (let i = 0; i < pulseParticles.length; i++) {
-      const p = pulseParticles[i];
-      p.progress = (p.progress + p.speed * speedScale) % 1.0;
-      p.mesh.position.lerpVectors(p.edge.source.position, p.edge.target.position, p.progress);
-    }
   }
 }

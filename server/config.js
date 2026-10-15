@@ -12,6 +12,9 @@ try {
 
 const port = Number(process.env.PORT || 5173);
 
+// user-library-read is needed for Liked Songs.
+export const REQUIRED_SCOPES = ['user-top-read', 'user-read-recently-played', 'user-library-read'];
+
 export const config = {
   port,
   // Spotify only allows plain-http redirects for an explicit loopback IP, never "localhost".
@@ -22,7 +25,7 @@ export const config = {
   // Optional override; otherwise derived from the incoming request (see getRedirectUri).
   redirectUriOverride: process.env.SPOTIFY_REDIRECT_URI || '',
   sessionSecret: process.env.SESSION_SECRET || process.env.SPOTIFY_CLIENT_SECRET || '',
-  scopes: ['user-top-read', 'user-read-recently-played'].join(' ')
+  scopes: REQUIRED_SCOPES.join(' ')
 };
 
 export function isSpotifyConfigured() {

@@ -15,7 +15,6 @@ import Graph from 'graphology';
 import louvain from 'graphology-communities-louvain';
 import { familyVector, familyInfo, familiesForGenre, OTHER_FAMILY, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
 
-const MAX_CLUSTERS = 9;
 const LOUVAIN_RESOLUTION = 1.3;
 // Countries are a scene signal, slightly weaker than an actual genre tag.
 const COUNTRY_TAG_WEIGHT = 0.85;
@@ -89,6 +88,8 @@ function variantColor(hex, variantIndex) {
  */
 export function clusterArtists(artists, collabs) {
   const byId = new Map(artists.map(a => [a.id, a]));
+  // Bigger libraries earn more clusters, within what a legend can still show.
+  const maxClusters = Math.max(8, Math.min(16, Math.round(Math.sqrt(artists.length) * 0.9)));
 
   // Tag TF-IDF vectors (genres + "@country") and family vectors (genres only).
   artists.forEach(a => {
@@ -165,7 +166,7 @@ export function clusterArtists(artists, collabs) {
         const l = linkage(C, D);
         if (l > bestLink) { bestLink = l; best = j; }
       });
-      const overflow = clusters.length > MAX_CLUSTERS && i === 0;
+      const overflow = clusters.length > maxClusters && i === 0;
       const tooSmall = (C.length === 1 && bestLink > 0.05) || (C.length === 2 && bestLink > 0.2);
       if (best >= 0 && (overflow || tooSmall)) {
         clusters[best].push(...C);

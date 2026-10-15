@@ -8,7 +8,9 @@
 
 const WIKIDATA_SPARQL = 'https://query.wikidata.org/sparql';
 const USER_AGENT = 'ASTRA-music-universe/1.0 (https://astra-3d-music-universe.vercel.app)';
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 25000;
+// Ids per SPARQL query; large VALUES blocks get slow.
+const CHUNK_SIZE = 250;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 // spotifyId → { meta: { genres, countries, occupations }, fetchedAt }. Misses are cached too.
@@ -61,21 +63,24 @@ async function queryWikidata(spotifyIds) {
   const failed = [];
   try {
     // Sequential: Wikidata throttles concurrent queries from one IP.
-    for (const [field, path] of Object.entries(PROPERTIES)) {
-      let rows;
-      try {
-        rows = await sparql(buildQuery(spotifyIds, path), controller.signal);
-      } catch (err) {
-        failed.push(`${field}: ${err.name === 'AbortError' ? 'timed out' : err.message}`);
-        continue;
+    for (let i = 0; i < spotifyIds.length; i += CHUNK_SIZE) {
+      const chunk = spotifyIds.slice(i, i + CHUNK_SIZE);
+      for (const [field, path] of Object.entries(PROPERTIES)) {
+        let rows;
+        try {
+          rows = await sparql(buildQuery(chunk, path), controller.signal);
+        } catch (err) {
+          failed.push(`${field}: ${err.name === 'AbortError' ? 'timed out' : err.message}`);
+          continue;
+        }
+        rows.forEach(row => {
+          const sid = row.sid.value;
+          if (!out.has(sid)) out.set(sid, { genres: [], countries: [], occupations: [] });
+          out.get(sid)[field] = row.values.value.split('|').filter(Boolean);
+        });
       }
-      rows.forEach(row => {
-        const sid = row.sid.value;
-        if (!out.has(sid)) out.set(sid, { genres: [], countries: [], occupations: [] });
-        out.get(sid)[field] = row.values.value.split('|').filter(Boolean);
-      });
     }
-    return { out, failed };
+    return { out, failed: [...new Set(failed)] };
   } finally {
     clearTimeout(timer);
   }
