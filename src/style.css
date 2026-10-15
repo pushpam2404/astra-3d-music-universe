@@ -255,7 +255,7 @@ input {
   top: calc(var(--gutter) + var(--bar-height) + 8px);
   right: calc(var(--gutter) + var(--panel-width) + 12px);
   z-index: 30;
-  width: 290px;
+  width: 240px;
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -281,16 +281,6 @@ input {
   align-items: center;
   gap: 10px;
   cursor: pointer;
-}
-
-#view-panel input[type="radio"] {
-  accent-color: var(--starlight);
-}
-
-.option-hint {
-  color: var(--faint);
-  font-size: 12px;
-  margin-left: auto;
 }
 
 #view-panel input[type="checkbox"] {

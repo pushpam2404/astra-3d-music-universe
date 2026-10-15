@@ -1,6 +1,12 @@
 // src/physics/galaxyLayout.js
 /**
- * Deterministic 3D "embedding cloud" layout, like a vector-database visualization:
+ * 3D layout where distance means similarity: every artist sits at the server's UMAP
+ * embedding (`artist.embed`), scaled so the typical nearest-neighbour gap leaves room
+ * for moons, with each sun at its members' centroid. Size and brightness (factory)
+ * show how much you listen.
+ *
+ * Fallback when there is no embedding (the demo, libraries under 8 artists): a
+ * deterministic cloud arrangement:
  *
  *  - Each cluster is a 3D cloud of artists around its sun; the most-listened artists
  *    sit near the center, the long tail toward the edge (radius ∝ cube root of rank,
@@ -11,17 +17,11 @@
  *  - Bridge artists (strong ties to two clusters) float between both clouds.
  *  - Tracks orbit their artist as moons on inclined orbits.
  *
- * A second arrangement, "similarity", places every artist by the server's UMAP
- * embedding (`artist.embed`), so distance means how alike two artists are, inside
- * clusters too; each sun sits at its members' centroid. Both arrangements are
- * computed up front and `setMode` glides between them.
- *
  * Artist positions are static; only moons move (the camera slowly orbits instead).
  */
 import * as THREE from 'three';
 import { LAYOUT_CONFIG } from '../config/constants.js';
 
-const TRANSITION_MS = 1400;
 // Similarity view: outliers beyond this multiple of the 90th-percentile radius are pulled in.
 const OUTLIER_EDGE = 1.35;
 
@@ -75,19 +75,9 @@ export class GalaxyLayoutEngine {
     this.nodeScaleMultiplier = 1.0;
     this.time = 0;
     this.boundingRadius = 200;
-    this.mode = 'similarity'; // 'similarity' | 'clusters'
+    this.mode = 'clusters'; // 'similarity' when embeddings exist, else the cloud fallback
     this.hasSimilarity = false;
-    this.transition = null; // { from, start }
     this.bounds = { clusters: 200, similarity: 200 };
-  }
-
-  /** Switches arrangement; positions glide over TRANSITION_MS. Returns the new bounding radius. */
-  setMode(mode, nodes) {
-    const next = mode === 'similarity' && this.hasSimilarity ? 'similarity' : 'clusters';
-    if (next !== this.mode && nodes?.length) this.transition = { from: this.mode, start: performance.now() };
-    this.mode = next;
-    this.boundingRadius = this.bounds[next];
-    return this.boundingRadius;
   }
 
   initializeNodePositions(nodes) {
@@ -229,8 +219,8 @@ export class GalaxyLayoutEngine {
     });
 
     this.computeSimilarityPositions(suns, artists, sunById);
-    this.transition = null;
-    this.setMode(this.mode);
+    this.mode = this.hasSimilarity ? 'similarity' : 'clusters';
+    this.boundingRadius = this.bounds[this.mode];
 
     this.time = 0;
     this.applyPositions(nodes);
@@ -306,24 +296,13 @@ export class GalaxyLayoutEngine {
     const t = this.time;
     const scale = this.nodeScaleMultiplier;
     const mode = this.mode;
-    let blend = 1;
-    if (this.transition) {
-      const p = Math.min(1, (performance.now() - this.transition.start) / TRANSITION_MS);
-      blend = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2; // easeInOutCubic
-      if (p >= 1) this.transition = null;
-    }
-    const from = this.transition?.from;
 
-    // Suns and artists: their arrangement's position (gliding during a switch).
+    // Suns and artists: static positions from the active arrangement.
     for (const n of nodes) {
       if (n.type === 'track' || !n.layoutPos) continue;
-      const target = n.layoutPos[mode] || n.layoutPos.clusters;
-      if (from) n.position.lerpVectors(n.layoutPos[from] || target, target, blend);
-      else n.position.copy(target);
+      n.position.copy(n.layoutPos[mode] || n.layoutPos.clusters);
       if (n.type === 'genre') {
-        const rTo = n.layoutRadius[mode] || n.layoutRadius.clusters;
-        const rFrom = from ? (n.layoutRadius[from] || rTo) : rTo;
-        n.currentClusterRadius = rFrom + (rTo - rFrom) * blend;
+        n.currentClusterRadius = n.layoutRadius[mode] || n.layoutRadius.clusters;
       } else if (scale !== 1 && n.type === 'artist' && !n.isBridge) {
         // Planet size slider also loosens the arrangement a little around each sun.
         const sun = n._sun || (n._sun = nodes.find(x => x.id === n.primarySunId));

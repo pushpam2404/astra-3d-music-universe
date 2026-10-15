@@ -14,7 +14,7 @@ const $ = (id) => document.getElementById(id);
 export class Hud {
   /**
    * @param {object} state  AppState (layers, nodes)
-   * @param {object} cb     { onSelectNode, onBack, onResetCamera, onLayersChange, onArrange, onGlow, onOrbitSpeed, onNodeScale, onDisconnected }
+   * @param {object} cb     { onSelectNode, onBack, onResetCamera, onLayersChange, onGlow, onOrbitSpeed, onNodeScale, onDisconnected }
    */
   constructor(state, cb) {
     this.state = state;
@@ -140,19 +140,6 @@ export class Hud {
     };
     this.applyInitialSettings = [];
 
-    // Arrangement: remembered per browser like the sliders.
-    const radios = [...document.querySelectorAll('input[name="arrange"]')];
-    try {
-      const saved = localStorage.getItem('astra_arrange');
-      if (saved) radios.forEach(r => { r.checked = r.value === saved; });
-    } catch { /* storage unavailable */ }
-    radios.forEach(r => r.addEventListener('change', () => {
-      if (!r.checked) return;
-      try { localStorage.setItem('astra_arrange', r.value); } catch { /* ignore */ }
-      this.cb.onArrange(r.value);
-    }));
-    this.arrangeMode = () => radios.find(r => r.checked)?.value || 'similarity';
-
     bindSlider('glow-slider', 'glow-val', v => `${Math.round(v * 100)}%`, v => this.cb.onGlow(v));
     bindSlider('orbit-speed-slider', 'orbit-speed-val', v => (v === 0 ? 'paused' : `${v}×`), v => this.cb.onOrbitSpeed(v));
     $('node-scale-slider').addEventListener('input', (e) => {
@@ -165,11 +152,6 @@ export class Hud {
   /** Re-applies remembered slider settings (call after a universe is built). */
   restoreSettings() {
     this.applyInitialSettings.forEach(apply => apply());
-  }
-
-  /** The similarity arrangement needs server embeddings; hide the choice without them. */
-  setArrangeAvailable(available) {
-    $('arrange-fieldset').hidden = !available;
   }
 
   /* ---------- Side panel ---------- */
