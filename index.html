@@ -59,6 +59,8 @@
 
   <!-- Right column: the cluster list, or details of whatever is selected. Never both. -->
   <aside id="side-panel" class="panel" aria-live="polite">
+    <!-- Phones only: drag or tap to raise / lower the bottom sheet -->
+    <button id="sheet-handle" type="button" aria-label="Show clusters" aria-expanded="false"><span></span></button>
     <div id="cluster-view">
       <h2 class="panel-heading">Clusters</h2>
       <ol id="cluster-list"></ol>

@@ -34,16 +34,29 @@ async function initApp() {
 
   // Center the galaxy in the area the side panel leaves visible (right column on wide
   // screens, bottom sheet on phones), not in the whole window.
-  function updateViewOffset() {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    const narrow = w <= 760;
-    const shiftX = narrow ? 0 : (320 + 16) / 2;
-    const shiftY = narrow ? h * 0.21 : 0;
-    camera.setViewOffset(w, h, shiftX, shiftY, w, h);
+  // On phones the shift follows the bottom sheet, eased so the galaxy glides up/down.
+  const viewShift = { x: 0, y: 0, tx: 0, ty: 0 };
+  let sheetCover = () => 84; // replaced once the HUD exists
+  function updateViewOffset(snap = false) {
+    const narrow = window.innerWidth <= 760;
+    viewShift.tx = narrow ? 0 : (320 + 16) / 2;
+    // Centre in the gap between the top bar and the sheet.
+    const barBottom = narrow ? document.getElementById('top-bar').getBoundingClientRect().bottom : 0;
+    viewShift.ty = narrow ? (sheetCover() - barBottom) / 2 : 0;
+    if (snap === true) { viewShift.x = viewShift.tx; viewShift.y = viewShift.ty; }
+    applyViewOffset();
   }
-  updateViewOffset();
-  window.addEventListener('resize', updateViewOffset);
+  function applyViewOffset() {
+    camera.setViewOffset(window.innerWidth, window.innerHeight, viewShift.x, viewShift.y, window.innerWidth, window.innerHeight);
+  }
+  function easeViewOffset() {
+    if (Math.abs(viewShift.tx - viewShift.x) + Math.abs(viewShift.ty - viewShift.y) < 0.5) return;
+    viewShift.x += (viewShift.tx - viewShift.x) * 0.15;
+    viewShift.y += (viewShift.ty - viewShift.y) * 0.15;
+    applyViewOffset();
+  }
+  updateViewOffset(true);
+  window.addEventListener('resize', () => updateViewOffset(true));
 
   const factory = new CelestialFactory(scene);
   const layout = new GalaxyLayoutEngine();
@@ -65,6 +78,7 @@ async function initApp() {
   function clearSelection() {
     AppState.selectedNode = null;
     hud.showClusters();
+    if (hud.isPhone()) hud.setSheet(false);
   }
 
   const detailPanel = new DetailPanel(document.getElementById('detail-content'), {
@@ -86,6 +100,7 @@ async function initApp() {
       cameraController.resetOverview();
     },
     onLayersChange: applyLayerVisibility,
+    onSheetChange: () => updateViewOffset(),
     onGlow: (level) => {
       bloomPass.strength = BLOOM_STRENGTH * level;
       factory.setGlow(level, AppState.nodes);
@@ -102,6 +117,8 @@ async function initApp() {
     },
     onDisconnected: () => loadDemo()
   });
+  sheetCover = () => hud.sheetCover();
+  updateViewOffset(true);
 
   // ---------- Pointer: hover and click on the canvas only ----------
 
@@ -114,16 +131,40 @@ async function initApp() {
   renderer.domElement.addEventListener('pointerleave', () => pointer.set(-9, -9));
   renderer.domElement.addEventListener('pointerdown', (e) => { downAt = { x: e.clientX, y: e.clientY }; });
   renderer.domElement.addEventListener('pointerup', (e) => {
-    // A drag rotates the view; only a tap/click selects.
-    if (!downAt || Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > 5) return;
-    setPointer(e);
-    const node = pickNode();
-    if (node) selectNode(node);
-    else if (AppState.selectedNode) clearSelection();
+    // A drag rotates the view; only a tap/click selects. Fingers wobble more than mice.
+    const touch = e.pointerType !== 'mouse';
+    const moved = downAt ? Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) : Infinity;
+    if (moved <= (touch ? 10 : 5)) {
+      setPointer(e);
+      const node = pickNode() || pickNearest(e.clientX, e.clientY, touch ? 26 : 8);
+      if (node) {
+        selectNode(node);
+        if (touch) navigator.vibrate?.(8);
+      } else if (AppState.selectedNode) clearSelection();
+      else if (touch && hud.sheetOpen) hud.setSheet(false);
+    }
+    // Touch has no hover: don't leave a phantom hover where the finger lifted.
+    if (touch) pointer.set(-9, -9);
   });
+  renderer.domElement.addEventListener('pointercancel', () => pointer.set(-9, -9));
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && AppState.selectedNode && document.activeElement?.tagName !== 'INPUT') clearSelection();
   });
+
+  /** Closest sun or artist on screen within `radius` px: small planets are hard to tap exactly. */
+  function pickNearest(x, y, radius) {
+    let best = null, bestD = radius;
+    const v = new THREE.Vector3();
+    for (const n of AppState.nodes) {
+      if (n.type === 'track' || !n.position || n.meshGroup?.visible === false) continue;
+      if (n.type === 'artist' && !AppState.layers.artists) continue;
+      v.copy(n.position).project(camera);
+      if (v.z > 1) continue;
+      const d = Math.hypot((v.x + 1) / 2 * window.innerWidth - x, (1 - v.y) / 2 * window.innerHeight - y);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    return best;
+  }
 
   function pickNode() {
     raycaster.setFromCamera(pointer, camera);
@@ -268,6 +309,7 @@ async function initApp() {
     const delta = Math.min(32, now - lastTime);
     lastTime = now;
 
+    easeViewOffset();
     layout.step(AppState.nodes, delta);
     factory.updateArtistInstances();
     factory.updateTrackInstances();

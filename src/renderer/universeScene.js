@@ -23,7 +23,7 @@ export function createUniverseScene(canvasContainer) {
     alpha: false
   });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setPixelRatio(maxPixelRatio());
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.1;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -61,7 +61,7 @@ export function createUniverseScene(canvasContainer) {
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(maxPixelRatio());
   });
 
   return { scene, camera, renderer, controls, starfield };
@@ -111,4 +111,9 @@ function createStarfield() {
   });
 
   return new THREE.Points(geometry, material);
+}
+
+/** Phones have very dense screens and small GPUs: 1.5× looks the same and keeps it smooth. */
+function maxPixelRatio() {
+  return Math.min(window.devicePixelRatio, window.matchMedia('(pointer: coarse)').matches ? 1.5 : 2);
 }

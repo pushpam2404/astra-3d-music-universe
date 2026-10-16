@@ -158,9 +158,66 @@ export class Hud {
 
   initSidePanel() {
     $('detail-back-btn').addEventListener('click', () => this.cb.onBack());
+
+    // Phones: the panel is a bottom sheet that rests lowered (just its heading showing)
+    // so the galaxy gets the screen. Tap the handle or heading to toggle, or drag it.
+    const panel = $('side-panel');
+    const handle = $('sheet-handle');
+    let drag = null;
+    const grabbable = (e) => !this.sheetOpen || e.target === handle || handle.contains(e.target) || e.target.closest?.('.panel-heading');
+    panel.addEventListener('pointerdown', (e) => {
+      if (!this.isPhone() || !grabbable(e)) return;
+      drag = { y: e.clientY, moved: 0 };
+      panel.setPointerCapture(e.pointerId);
+    });
+    panel.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      drag.moved = e.clientY - drag.y;
+      const base = this.sheetOpen ? 0 : panel.offsetHeight - this.peekHeight();
+      panel.style.transition = 'none';
+      panel.style.transform = `translateY(${Math.max(0, base + drag.moved)}px)`;
+    });
+    const end = () => {
+      if (!drag) return;
+      panel.style.transition = '';
+      panel.style.transform = '';
+      const { moved } = drag;
+      drag = null;
+      if (Math.abs(moved) < 6) this.setSheet(!this.sheetOpen);
+      else this.setSheet(moved < 0);
+    };
+    panel.addEventListener('pointerup', end);
+    panel.addEventListener('pointercancel', end);
+    this.sheetOpen = false;
+    this.setSheet(false);
+  }
+
+  isPhone() {
+    return window.innerWidth <= 760;
+  }
+
+  /** Height of the lowered sheet: handle + heading. */
+  peekHeight() {
+    return 84;
+  }
+
+  /** Raise (true) or lower (false) the phone bottom sheet; no-op layout on desktop. */
+  setSheet(open) {
+    this.sheetOpen = open;
+    document.body.classList.toggle('sheet-open', open);
+    $('sheet-handle').setAttribute('aria-expanded', String(open));
+    $('sheet-handle').setAttribute('aria-label', open ? 'Lower panel' : 'Raise panel');
+    this.cb.onSheetChange?.();
+  }
+
+  /** Pixels of screen the sheet covers at the bottom (phones only). */
+  sheetCover() {
+    if (!this.isPhone()) return 0;
+    return this.sheetOpen ? $('side-panel').offsetHeight + 10 : this.peekHeight() + 10;
   }
 
   showClusters() {
+    document.body.classList.remove('showing-details');
     $('detail-view').hidden = true;
     $('cluster-view').hidden = false;
   }
@@ -168,6 +225,9 @@ export class Hud {
   showDetails() {
     $('cluster-view').hidden = true;
     $('detail-view').hidden = false;
+    $('detail-view').scrollTop = 0;
+    document.body.classList.add('showing-details');
+    if (this.isPhone()) this.setSheet(true);
   }
 
   /** Clusters, largest first; clicking one flies to it and opens its details. */

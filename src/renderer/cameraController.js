@@ -20,12 +20,14 @@ export class CameraFlightController {
     const standoffDist =
       node.type === 'genre' ? Math.max(70, (node.currentClusterRadius || node.clusterRadius || 60) * 1.9) :
       node.type === 'artist' ? 26 + (node.systemRadius || node.baseRadius * 4) * 2.2 : 14;
+    // Portrait phones are narrow (and half covered by the sheet): stand further back.
+    const portrait = this.camera.aspect < 1 ? Math.min(1.8, 0.85 / this.camera.aspect) : 1;
 
     const viewDir = new THREE.Vector3().subVectors(this.camera.position, this.controls.target).normalize();
     if (viewDir.lengthSq() < 0.001) viewDir.set(0, 0.4, 1).normalize();
 
     this.targetLookAt.copy(node.position);
-    this.targetCameraPos.copy(node.position).addScaledVector(viewDir, standoffDist);
+    this.targetCameraPos.copy(node.position).addScaledVector(viewDir, standoffDist * Math.max(1, portrait));
     this.active = true;
   }
 
