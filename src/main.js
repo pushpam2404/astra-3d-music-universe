@@ -256,7 +256,7 @@ async function initApp() {
         authStatus = { ...authStatus, loggedIn: false };
         hud.setAuthStatus(authStatus);
       }
-      hud.setNotice(err.message, err.status === 401 ? null : { label: 'Try again', run: loadLive });
+      hud.setNotice(err.message, err.status === 401 || err.status === 429 ? null : { label: 'Try again', run: loadLive });
     } finally {
       hud.setLoading(false);
     }

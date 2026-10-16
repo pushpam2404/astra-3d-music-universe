@@ -8,12 +8,17 @@ const ACCOUNTS_BASE = 'https://accounts.spotify.com';
 const API_BASE = 'https://api.spotify.com/v1';
 
 export class SpotifyError extends Error {
-  constructor(status, message, endpoint) {
+  constructor(status, message, endpoint, retryAfterSec = 0) {
     super(message);
     this.status = status;
     this.endpoint = endpoint;
+    this.retryAfterSec = retryAfterSec;
   }
 }
+
+// When Spotify rate-limits the app, every further request extends the block. Once it
+// asks for more than a short wait, stop calling it at all until the wait is over.
+let blockedUntil = 0;
 
 export function buildAuthorizeUrl(state, redirectUri) {
   const params = new URLSearchParams({
@@ -74,13 +79,19 @@ export function createApi(session, onTokensRefreshed) {
   }
 
   async function get(endpoint, attempt = 0) {
+    const waitSec = Math.ceil((blockedUntil - Date.now()) / 1000);
+    if (waitSec > 0) throw new SpotifyError(429, 'Too many requests', endpoint, waitSec);
     const token = await getValidAccessToken();
     const res = await fetch(`${API_BASE}${endpoint}`, { headers: { Authorization: `Bearer ${token}` } });
 
-    if (res.status === 429 && attempt < 3) {
+    if (res.status === 429) {
       const retryAfterSec = Number(res.headers.get('Retry-After') || 1);
-      await sleep(Math.min(retryAfterSec, 10) * 1000);
-      return get(endpoint, attempt + 1);
+      if (retryAfterSec <= 10 && attempt < 2) {
+        await sleep(retryAfterSec * 1000);
+        return get(endpoint, attempt + 1);
+      }
+      blockedUntil = Math.max(blockedUntil, Date.now() + retryAfterSec * 1000);
+      throw new SpotifyError(429, 'Too many requests', endpoint, retryAfterSec);
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));

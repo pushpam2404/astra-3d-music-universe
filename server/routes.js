@@ -98,6 +98,14 @@ async function universeHandler(req, res) {
             'User Management in the developer dashboard, and the app owner needs an active Premium subscription.'
         });
       }
+      if (err.status === 429) {
+        const min = Math.max(1, Math.ceil((err.retryAfterSec || 60) / 60));
+        const wait = min >= 90 ? `about ${Math.round(min / 60)} hours` : `about ${min} minute${min === 1 ? '' : 's'}`;
+        console.error('[universe] rate limited, Retry-After', err.retryAfterSec, 's');
+        return res.status(429).json({
+          error: `Spotify is limiting requests from Astra for now. Your map will load again in ${wait}; reloading before then makes the wait longer.`
+        });
+      }
       return res.status(502).json({ error: `Spotify API error ${err.status} on ${err.endpoint}: ${err.message}` });
     }
     res.status(500).json({ error: 'Failed to build universe.' });
