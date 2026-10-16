@@ -52,6 +52,41 @@ const EMBED_CLUSTER_WEIGHT = 0.35;
  * and cluster labels are blended in so each cluster stays a coherent region.
  * Output is centered, with the 90th-percentile radius scaled to 1. Deterministic.
  */
+// Gap between clusters, in multiples of a cluster's own size, beyond which the map
+// reads as scattered islands. Clean clusters come out of UMAP tight and far apart;
+// pulling the cluster centres in (members keep their offsets) keeps one sphere.
+const MAX_CLUSTER_GAP_RATIO = 5;
+
+function compactClusters(points, labels) {
+  const groups = new Map();
+  points.forEach((p, i) => {
+    if (!groups.has(labels[i])) groups.set(labels[i], []);
+    groups.get(labels[i]).push(i);
+  });
+  if (groups.size < 2) return points;
+  const centre = new Map();
+  let spread = 0;
+  groups.forEach((members, c) => {
+    const m = [0, 1, 2].map(d => members.reduce((s, i) => s + points[i][d], 0) / members.length);
+    centre.set(c, m);
+    spread += members.reduce((s, i) => s + Math.hypot(...points[i].map((v, d) => v - m[d])), 0);
+  });
+  spread /= points.length;
+  const cs = [...centre.values()];
+  let gap = 0, pairs = 0;
+  for (let a = 0; a < cs.length; a++) {
+    for (let b = a + 1; b < cs.length; b++) { gap += Math.hypot(...cs[a].map((v, d) => v - cs[b][d])); pairs++; }
+  }
+  gap /= pairs;
+  const ratio = gap / (spread || 1e-6);
+  if (ratio <= MAX_CLUSTER_GAP_RATIO) return points;
+  const k = MAX_CLUSTER_GAP_RATIO / ratio;
+  return points.map((p, i) => {
+    const m = centre.get(labels[i]);
+    return p.map((v, d) => m[d] * k + (v - m[d]));
+  });
+}
+
 function embed3d(n, neighbors, labels) {
   if (n < 8) return null;
   const k = Math.min(EMBED_NEIGHBORS, n - 1);
@@ -83,7 +118,8 @@ function embed3d(n, neighbors, labels) {
   const raw = umap.fit(Array.from({ length: n }, (_, i) => [i]));
 
   const mean = [0, 1, 2].map(d => raw.reduce((s, p) => s + p[d], 0) / n);
-  const centered = raw.map(p => p.map((v, d) => v - mean[d]));
+  let centered = raw.map(p => p.map((v, d) => v - mean[d]));
+  centered = compactClusters(centered, labels);
   const radii = centered.map(p => Math.hypot(...p)).sort((a, b) => a - b);
   const scale = radii[Math.floor(n * 0.9)] || 1;
   return centered.map(p => p.map(v => Number((v / scale).toFixed(4))));
