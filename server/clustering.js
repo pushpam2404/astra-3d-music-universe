@@ -21,6 +21,12 @@ const LOUVAIN_RESOLUTION = 1.3;
 // Countries are a scene signal, slightly weaker than an actual genre tag.
 const COUNTRY_TAG_WEIGHT = 0.85;
 const EDGE_THRESHOLD = 0.12;
+// Played-together bonus for genre-less artists: up to TOGETHER_MAX, reached at
+// TOGETHER_FULL (two adjacent plays/likes).
+const TOGETHER_MAX = 0.7;
+const TOGETHER_FULL = 2;
+// Played-together weight with one cluster that moves a genre-less artist into it.
+const TOGETHER_REASSIGN = 1;
 // Sparse similarity: tags shared by more artists than this don't generate candidate pairs,
 // each artist is compared with at most MAX_CANDIDATES others and keeps MAX_NEIGHBORS.
 const MAX_CANDIDATE_DF = 400;
@@ -56,6 +62,12 @@ const EMBED_CLUSTER_WEIGHT = 0.35;
 // reads as scattered islands. Clean clusters come out of UMAP tight and far apart;
 // pulling the cluster centres in (members keep their offsets) keeps one sphere.
 const MAX_CLUSTER_GAP_RATIO = 5;
+const MAX_ISOLATION = 1.5;
+
+function pairHash(i, j) {
+  const a = Math.min(i, j), b = Math.max(i, j);
+  return Math.imul(a * 73856093 ^ b * 19349663, 2654435761) >>> 0;
+}
 
 function compactClusters(points, labels) {
   const groups = new Map();
@@ -79,11 +91,30 @@ function compactClusters(points, labels) {
   }
   gap /= pairs;
   const ratio = gap / (spread || 1e-6);
-  if (ratio <= MAX_CLUSTER_GAP_RATIO) return points;
-  const k = MAX_CLUSTER_GAP_RATIO / ratio;
+  const k = Math.min(1, MAX_CLUSTER_GAP_RATIO / ratio);
+  const target = new Map([...centre].map(([c, m]) => [c, m.map(v => v * k)]));
+  // A cluster sharing little with the rest (e.g. artists known only by country) would
+  // still float far out on its own: keep it within MAX_ISOLATION × the usual distance
+  // from its nearest neighbouring cluster.
+  const nearest = new Map();
+  target.forEach((m, c) => {
+    let best = null, bestD = Infinity;
+    target.forEach((o, e) => {
+      const dd = e === c ? Infinity : Math.hypot(...m.map((v, d) => v - o[d]));
+      if (dd < bestD) { bestD = dd; best = o; }
+    });
+    nearest.set(c, [best, bestD]);
+  });
+  const dists = [...nearest.values()].map(x => x[1]).sort((a, b) => a - b);
+  const limit = dists[Math.floor(dists.length / 2)] * MAX_ISOLATION;
+  nearest.forEach(([o, dd], c) => {
+    if (dd <= limit) return;
+    const m = target.get(c);
+    target.set(c, m.map((v, d) => o[d] + (v - o[d]) * (limit / dd)));
+  });
   return points.map((p, i) => {
-    const m = centre.get(labels[i]);
-    return p.map((v, d) => m[d] * k + (v - m[d]));
+    const m = centre.get(labels[i]), t = target.get(labels[i]);
+    return p.map((v, d) => t[d] + (v - m[d]));
   });
 }
 
@@ -128,8 +159,9 @@ function embed3d(n, neighbors, labels) {
 /**
  * @param {Array<{id, name, genres: string[], countries: string[], score: number}>} artists  genres normalized
  * @param {Map<string, number>} collabs  key "idA|idB" (sorted) → number of shared top tracks
+ * @param {Map<string, number>} together  same key → how often they're played/liked side by side
  */
-export function clusterArtists(artists, collabs) {
+export function clusterArtists(artists, collabs, together = new Map()) {
   const byId = new Map(artists.map(a => [a.id, a]));
   // Bigger libraries earn more clusters, within what a legend can still show.
   const maxClusters = Math.max(8, Math.min(16, Math.round(Math.sqrt(artists.length) * 0.9)));
@@ -185,6 +217,11 @@ export function clusterArtists(artists, collabs) {
     if (a.vecIdx.length && b.vecIdx.length) w = 0.55 * sparseDot(a, b) + 0.45 * famDot(a, b);
     const shared = collabs.get(pairKey(a.id, b.id)) || 0;
     if (shared) w += Math.min(1, 0.45 * shared);
+    // Listening context only speaks for artists genres can't place.
+    if (!a.genres.length || !b.genres.length) {
+      const t = together.get(pairKey(a.id, b.id)) || 0;
+      if (t) w += TOGETHER_MAX * Math.min(1, t / TOGETHER_FULL);
+    }
     return w;
   };
 
@@ -198,7 +235,7 @@ export function clusterArtists(artists, collabs) {
     postings.get(t).push(i);
   }));
   const collabPartners = new Map();
-  collabs.forEach((_, k) => {
+  [...collabs.keys(), ...together.keys()].forEach(k => {
     const [x, y] = k.split('|');
     [[x, y], [y, x]].forEach(([p, q]) => {
       if (!byId.has(p) || !byId.has(q)) return;
@@ -230,7 +267,9 @@ export function clusterArtists(artists, collabs) {
     neighbors[i] = cand
       .map(j => ({ j, w: rawSim(a, artists[j]) }))
       .filter(e => e.w > 0)
-      .sort((x, y) => y.w - x.w)
+      // Ties (e.g. artists known only by country) break by a pair hash, not list order;
+      // list order chains tied artists into a line in the 3D map.
+      .sort((x, y) => y.w - x.w || pairHash(i, x.j) - pairHash(i, y.j))
       .slice(0, MAX_NEIGHBORS);
   }
 
@@ -316,6 +355,27 @@ export function clusterArtists(artists, collabs) {
     if (best >= 0) finalLabel[i] = best;
     else uncharted.push(artists[i].id);
   });
+
+  // Genre-less artists you play alongside genre-placed ones join those artists'
+  // cluster: concrete listening beats "same country" as evidence of sound.
+  const togetherScore = new Map(); // i → Map(cluster → weight)
+  together.forEach((t, k) => {
+    const [x, y] = k.split('|').map(id => byId.get(id));
+    if (!x || !y) return;
+    [[x, y], [y, x]].forEach(([p, q]) => {
+      if (p.genres.length || !q.genres.length || finalLabel[q.index] < 0) return;
+      if (!togetherScore.has(p.index)) togetherScore.set(p.index, new Map());
+      const m = togetherScore.get(p.index);
+      m.set(finalLabel[q.index], (m.get(finalLabel[q.index]) || 0) + t);
+    });
+  });
+  togetherScore.forEach((m, i) => {
+    const [best, t] = [...m].sort((x, y) => y[1] - x[1])[0];
+    if (t >= TOGETHER_REASSIGN) finalLabel[i] = best;
+  });
+  const stillUncharted = uncharted.filter(id => finalLabel[byId.get(id).index] < 0);
+  uncharted.length = 0;
+  uncharted.push(...stillUncharted);
 
   const groups = new Map();
   finalLabel.forEach((c, i) => {

@@ -108,7 +108,7 @@ export class DetailPanel {
       ]));
     }))));
     if (!this.ctx.isDemo()) {
-      parts.push(el('p', { class: 'source-note', text: 'Artists are grouped by shared genres, home country and collaborations.' }));
+      parts.push(el('p', { class: 'source-note', text: 'Artists are grouped by shared genres, home country and collaborations; artists with no genre data also by what you play alongside them.' }));
     }
     parts.push(this.actions(node));
     this.container.append(...parts);
@@ -152,7 +152,7 @@ export class DetailPanel {
         this.ctx.isDemo() ? null : el('p', { class: 'source-note', text: 'From Last.fm, Wikidata and MusicBrainz.' })
       ])));
     } else if (!this.ctx.isDemo()) {
-      parts.push(section('Genres', el('p', { class: 'empty-note', text: 'No genre data found for this artist yet, so they’re placed by home country and collaborations.' })));
+      parts.push(section('Genres', el('p', { class: 'empty-note', text: 'No genre data found for this artist yet, so they’re placed by home country, collaborations and the artists you play alongside them.' })));
     }
 
     parts.push(this.actions(node));

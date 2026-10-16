@@ -33,6 +33,9 @@ const METADATA_BUDGET_MS = 26000;
 // Unknown artists looked up during a load; the rest happen in the background.
 const INITIAL_ENRICH_LIMIT = 300;
 const SAVED_TRACK_SCORE = 120;
+// How many neighbouring likes / session plays count as "listened together".
+const LIKED_WINDOW = 5;
+const SESSION_WINDOW = 5;
 
 function hashUnit(str, salt) {
   let h = 2166136261;
@@ -97,6 +100,35 @@ async function optionalSource(diagnostics, label, fn) {
     diagnostics.warnings.push(`Could not load ${label} (${err.status || ''} ${err.message}).${hint}`);
     return [];
   }
+}
+
+/**
+ * Artists you play alongside each other: songs liked close together (same few days) and
+ * plays in the same listening session. Lets artists with no genre data sit next to the
+ * music you actually hear them with. Key "idA|idB" (sorted) → weight (1 per adjacent
+ * pair, 1/d for pairs d apart).
+ */
+function listenedTogether(saved, recent, includedIds) {
+  const together = new Map();
+  const link = (list, timeOf, maxGapMs, window) => {
+    const items = list
+      .map(item => ({ ids: (item.track?.artists || []).map(a => a.id).filter(id => includedIds.has(id)), t: Date.parse(timeOf(item)) }))
+      .filter(x => x.ids.length && Number.isFinite(x.t));
+    for (let i = 0; i < items.length; i++) {
+      for (let d = 1; d <= window && i + d < items.length; d++) {
+        const b = items[i + d];
+        if (Math.abs(items[i].t - b.t) > maxGapMs) break;
+        items[i].ids.forEach(x => b.ids.forEach(y => {
+          if (x === y) return;
+          const k = x < y ? `${x}|${y}` : `${y}|${x}`;
+          together.set(k, (together.get(k) || 0) + 1 / d);
+        }));
+      }
+    }
+  };
+  link(saved, item => item.added_at, 3 * 24 * 3600 * 1000, LIKED_WINDOW);
+  link(recent, item => item.played_at, 30 * 60 * 1000, SESSION_WINDOW);
+  return together;
 }
 
 export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
@@ -243,9 +275,12 @@ export async function buildUniverseDataset(api, { knownMeta = {} } = {}) {
     }
   });
 
+  const together = listenedTogether(saved, recent, includedIdSet);
+  diagnostics.listenedTogetherPairs = together.size;
   const { clusters, assignment, affinityMatrix, positions } = clusterArtists(
     includedArtists.map(a => ({ id: a.id, name: a.name, ...artistFeatures.get(a.id), score: artistScore.get(a.id) || 1 })),
-    collabs
+    collabs,
+    together
   );
   diagnostics.clusters = clusters.map(c => `${c.name} (${c.members.length})`);
 
