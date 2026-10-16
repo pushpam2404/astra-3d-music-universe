@@ -96,7 +96,7 @@ export function describeClusters(clusters, uncharted, byId, n) {
     const countryCount = new Map();
     members.forEach(id => {
       const a = byId.get(id);
-      Object.entries(a.fam).forEach(([f, w]) => { famScore[f] = (famScore[f] || 0) + w * scoreOf(id); });
+      Object.entries(a.families).forEach(([f, w]) => { famScore[f] = (famScore[f] || 0) + w * scoreOf(id); });
       new Set(a.genres).forEach(g => genreCount.set(g, (genreCount.get(g) || 0) + 1));
       new Set(a.countries).forEach(c => countryCount.set(c, (countryCount.get(c) || 0) + 1));
     });

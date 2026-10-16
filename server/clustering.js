@@ -27,6 +27,8 @@ const MAX_CANDIDATE_DF = 400;
 const MAX_CANDIDATES = 600;
 const COMMON_TAG_SLICE = 150;
 const MAX_NEIGHBORS = 30;
+// Up to this size every pair is compared exactly (as fast as the sparse path there).
+const EXACT_LIMIT = 2500;
 const BRIDGE_MIN_AFFINITY = 0.18;
 const BRIDGE_RATIO = 0.65;
 
@@ -53,13 +55,7 @@ const EMBED_CLUSTER_WEIGHT = 0.35;
 function embed3d(n, neighbors, labels) {
   if (n < 8) return null;
   const k = Math.min(EMBED_NEIGHBORS, n - 1);
-  // Each row: self first, then most similar neighbours; padded with same-cluster
-  // artists (then anyone) when an artist has too few similar ones.
-  const byCluster = new Map();
-  labels.forEach((c, i) => {
-    if (!byCluster.has(c)) byCluster.set(c, []);
-    byCluster.get(c).push(i);
-  });
+  // Each row: self first, then most similar neighbours.
   const knnIndices = [];
   const knnDistances = [];
   for (let i = 0; i < n; i++) {
@@ -70,11 +66,9 @@ function embed3d(n, neighbors, labels) {
       idx.push(j);
       dist.push(1 - Math.min(1, w));
     }
-    const pool = byCluster.get(labels[i]);
-    for (let s = 0; idx.length < k && s < pool.length; s++) {
-      const j = pool[(i + 1 + s) % pool.length];
-      if (!idx.includes(j)) { idx.push(j); dist.push(0.95); }
-    }
+    // Pad with unrelated artists at full distance, like a dense kNN would. Padding
+    // with same-cluster artists instead cuts every link between clusters, and UMAP
+    // then flings the clusters apart as separate islands.
     for (let s = 1; idx.length < k; s++) {
       const j = (i + s * 7919) % n;
       if (!idx.includes(j)) { idx.push(j); dist.push(1); }
@@ -131,6 +125,7 @@ export function clusterArtists(artists, collabs) {
       return [familyIds.get(f), w];
     });
     const famNorm = Math.hypot(...famEntries.map(e => e[1])) || 1;
+    a.families = fam;
     a.fam = famEntries.map(([f, w]) => [f, w / famNorm]);
   });
 
@@ -182,6 +177,9 @@ export function clusterArtists(artists, collabs) {
     const a = artists[i];
     const cand = [];
     const add = (j) => { if (j !== i && seen[j] !== i) { seen[j] = i; cand.push(j); } };
+    if (n <= EXACT_LIMIT) {
+      for (let j = 0; j < n; j++) add(j);
+    }
     const tagsByRarity = Array.from(a.vecIdx).sort((x, y) => df[x] - df[y]);
     for (const t of tagsByRarity) {
       const list = postings.get(t);
