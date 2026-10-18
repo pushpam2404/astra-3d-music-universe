@@ -5,8 +5,7 @@
  * into distant corners):
  *
  *  - Cluster centers sit on an affinity-seriated, radius-relaxed sphere (`sun.anchor`),
- *    solved so every pair of neighbouring cluster clouds has a clear dark-sky channel
- *    between their outer boundaries (`(r_i + r_j) * 1.32 + 28` separation).
+ *    with a compact ~50% tighter inter-cluster distance (`(r_i + r_j) * 0.72 + 4` separation).
  *  - Inside each cluster, artists are placed using their server UMAP similarity
  *    direction (`artist.embed`) blended with cube-root rank radius so top artists sit
  *    near the sun, musically similar artists sit together, and every cluster keeps a
@@ -92,10 +91,10 @@ export class GalaxyLayoutEngine {
     this.nodeScaleMultiplier = 1.0;
     this.clusterSpreadMultiplier = 1.0;
     this.time = 0;
-    this.boundingRadius = 220;
+    this.boundingRadius = 140;
     this.mode = 'clusters';
     this.hasSimilarity = false;
-    this.bounds = { clusters: 220, similarity: 220 };
+    this.bounds = { clusters: 140, similarity: 140 };
   }
 
   initializeNodePositions(nodes) {
@@ -133,13 +132,13 @@ export class GalaxyLayoutEngine {
       else if (a.primarySunId) members.get(a.primarySunId).push(a);
     });
 
-    // Cloud geometry per sun: well-contained 3D clouds around each sun.
+    // Cloud geometry per sun: compact, well-contained 3D clouds around each sun.
     suns.forEach(sun => {
       const list = members.get(sun.id).sort((a, b) => b.plays - a.plays);
       const meanSystem = list.length ? list.reduce((s, a) => s + a.systemRadius, 0) / list.length : 0;
-      const spacing = Math.max(4.8, meanSystem * 0.82);
+      const spacing = Math.max(4.2, meanSystem * 0.72);
       const core = sun.baseRadius * C.sunCoreFactor + C.cloudInnerGap;
-      sun.clusterRadius = core + spacing * Math.cbrt(list.length + 1) * 0.72;
+      sun.clusterRadius = core + spacing * Math.cbrt(list.length + 1) * 0.54;
       list.forEach((a, k) => {
         const t = (k + 0.5) / list.length;
         const r = core + (sun.clusterRadius - core) * Math.cbrt(t);
@@ -160,9 +159,7 @@ export class GalaxyLayoutEngine {
       return sharedCount.get([s.id, t.id].sort().join('|')) || 0;
     };
 
-    // Cluster centers on a radius-relaxed Fibonacci sphere: solved so every pair of
-    // cluster clouds has a clean, breathable dark-space channel between their outer rims
-    // (never overlapping, and never scattered far apart).
+    // Cluster centers on a radius-relaxed Fibonacci sphere, ~50% closer together.
     const order = seriate(suns, affinity);
     const initialDirs = order.map((_, i) => fibonacciSphere(i, order.length));
     const dirs = relaxSphereDirections(initialDirs, order.map(s => s.clusterRadius));
@@ -173,9 +170,7 @@ export class GalaxyLayoutEngine {
         const unitDist = dirs[i].distanceTo(dirs[j]);
         const ri = order[i].clusterRadius;
         const rj = order[j].clusterRadius;
-        // 1.32× sum of radii + 28 units guarantees a clear dark channel (~45–65 units)
-        // between the outer edge of cluster i and the outer edge of cluster j.
-        const minCenterDist = (ri + rj) * 1.32 + 28.0;
+        const minCenterDist = (ri + rj) * 0.72 + 4.0;
         R = Math.max(R, minCenterDist / unitDist);
       }
     }
@@ -183,11 +178,11 @@ export class GalaxyLayoutEngine {
     order.forEach((s, i) => {
       s.anchor = dirs[i].clone().multiplyScalar(R);
       s.position.copy(s.anchor);
-      bounding = Math.max(bounding, R + s.clusterRadius);
+      bounding = Math.max(bounding, R + s.clusterRadius * 0.9);
     });
-    this.bounds.clusters = Math.max(120, bounding);
+    this.bounds.clusters = Math.max(85, bounding);
 
-    // Bridges sit in the open channel between their two suns.
+    // Bridges sit in the channel between their two suns.
     const bridgeSlots = new Map();
     bridges.forEach(a => {
       const k = [a.primarySunId, a.secondarySunId].sort().join('|');
@@ -202,7 +197,7 @@ export class GalaxyLayoutEngine {
         const dist = dir.length() || 1;
         dir.divideScalar(dist);
         const w = Math.min(0.5, a.bridgeWeight ?? 0.5);
-        const along = THREE.MathUtils.lerp(A.clusterRadius * 0.9, dist - B.clusterRadius * 0.9, 0.25 + w);
+        const along = THREE.MathUtils.lerp(A.clusterRadius * 0.85, dist - B.clusterRadius * 0.85, 0.25 + w);
         const perpA = new THREE.Vector3().crossVectors(dir, Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
         const perpB = new THREE.Vector3().crossVectors(dir, perpA);
         const ring = C.bridgeSpacing * Math.sqrt(i);
@@ -289,8 +284,6 @@ export class GalaxyLayoutEngine {
         const dir = off.clone().normalize().addScaledVector(directionFor(a.id), 0.28).normalize();
         const normUmapR = Math.min(0.95, off.length() / p85);
         const rankR = a.cloudRadiusTarget || (sun.clusterRadius * 0.6);
-        // 65% cube-root rank radius + 35% UMAP radial offset keeps the cluster cloud
-        // evenly distributed inside a crisp spherical boundary so clusters never bleed together.
         const r = THREE.MathUtils.lerp(rankR, sun.clusterRadius * (0.18 + 0.78 * normUmapR), 0.35);
         a.localClusterOffset = dir.clone().multiplyScalar(r);
         a.layoutPos.similarity = sun.anchor.clone().add(a.localClusterOffset);
@@ -320,7 +313,6 @@ export class GalaxyLayoutEngine {
     const spread = this.clusterSpreadMultiplier || 1.0;
     const mode = this.mode;
 
-    // 1. Position cluster suns first (scaled by clusterSpreadMultiplier)
     for (const n of nodes) {
       if (n.type !== 'genre' || !n.layoutPos) continue;
       const baseAnchor = n.layoutPos[mode] || n.layoutPos.clusters;
@@ -329,7 +321,6 @@ export class GalaxyLayoutEngine {
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }
 
-    // 2. Position artists relative to their sun (or between their two suns for bridges)
     for (const n of nodes) {
       if (n.type !== 'artist' || !n.layoutPos) continue;
       if (n.isBridge) {
@@ -353,7 +344,6 @@ export class GalaxyLayoutEngine {
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }
 
-    // 3. Orbit track moons around their parent artist planet
     for (const n of nodes) {
       if (n.type !== 'track' || !n.parentNode) continue;
       const p = n.parentNode.position;
