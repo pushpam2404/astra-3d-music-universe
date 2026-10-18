@@ -1,11 +1,11 @@
 // src/renderer/labelProjector.js
 import * as THREE from 'three';
+import { nodeMatchesLens } from './celestialFactory.js';
 
 const tempProjVec = new THREE.Vector3();
 const LABEL_PADDING = 4;
-// Without focus, each cluster shows its top N artists by name.
 const TOP_ARTISTS_PER_CLUSTER = 3;
-const TOP_ARTISTS_OVERALL = 12;
+const TOP_ARTISTS_OVERALL = 14;
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -13,6 +13,9 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<
  * Projects 3D nodes to HTML labels. Labels are placed greedily by priority and any
  * label that would overlap an already placed one is hidden, so the screen never
  * turns into a pile of text.
+ *
+ * When a Time & Memory Lens is active (e.g. "Past favorites", "Dormant", "Early 2024"),
+ * matching artists and songs are promoted to label candidates with their memory badge.
  */
 export class LabelProjector {
   constructor(containerEl) {
@@ -27,8 +30,6 @@ export class LabelProjector {
     this.labelPool.clear();
     this.onLabelClick = onLabelClick;
     this.shown = new Set();
-    // Labels are created lazily, the first time a node is a label candidate: a big
-    // library has thousands of artists and songs, and only a few dozen are ever named.
     nodes.forEach(node => {
       node.labelEl = null;
       node.labelSize = null;
@@ -44,7 +45,9 @@ export class LabelProjector {
     if (node.isWormholeBridge) el.classList.add('label-wormhole');
     if (node.isBridge) el.classList.add('label-bridge');
 
-    const count = node.type === 'genre' ? `<span class="label-count">${node.neighbors?.size || 0}</span>` : '';
+    const count = node.type === 'genre'
+      ? `<span class="label-count">${node.neighbors?.size || 0}</span>`
+      : (node.history?.shortBadge ? `<span class="label-era">${escapeHtml(node.history.shortBadge)}</span>` : '');
     el.innerHTML = `<span class="label-dot" style="background:${node.color}"></span><span class="label-text">${escapeHtml(node.name)}</span>${count}`;
     el.style.opacity = '0';
     el.style.pointerEvents = 'none';
@@ -61,7 +64,6 @@ export class LabelProjector {
     return el;
   }
 
-  /** Writes to the DOM only when something changed. */
   hide(el) {
     if (!el || !el._shown) return;
     el._shown = false;
@@ -69,7 +71,7 @@ export class LabelProjector {
     el.style.pointerEvents = 'none';
   }
 
-  show(el, transform, opacity, focused) {
+  show(el, transform, opacity, focused, showBadge) {
     if (el._transform !== transform) {
       el._transform = transform;
       el.style.transform = transform;
@@ -84,26 +86,56 @@ export class LabelProjector {
       el._focused = focused;
       el.classList.toggle('focused', focused);
     }
+    if (el._showBadge !== showBadge) {
+      el._showBadge = showBadge;
+      el.classList.toggle('with-badge', Boolean(showBadge));
+    }
   }
 
-  priorityOf(node, activeNode) {
+  priorityOf(node, activeNode, activeLens = 'all') {
+    const hasLens = Boolean(activeLens && activeLens !== 'all');
+    const matchesLens = hasLens ? nodeMatchesLens(node, activeLens) : true;
+
     if (activeNode) {
       if (node.id === activeNode.id) return 0;
-      if (activeNode.neighbors?.has(node.id)) return node.type === 'genre' ? 1 : 2;
-      if (node.type === 'genre') return 3;
+      if (activeNode.neighbors?.has(node.id)) {
+        if (node.type === 'genre') return 1;
+        if (hasLens && matchesLens) return 1.5;
+        return node.type === 'artist' ? 2 : 2.5;
+      }
+      // When a cluster is selected, also surface its top songs that match the lens
+      if (activeNode.type === 'genre' && node.type === 'track' && node.connectedGenres?.includes(activeNode.name)) {
+        if (hasLens && matchesLens && (node.normScore ?? 0) > 0.35) return 2.8;
+        if (!hasLens && (node.normScore ?? 0) > 0.72) return 3.2;
+      }
+      if (node.type === 'genre') return 3.5;
       return -1;
     }
+
+    if (hasLens) {
+      if (node.type === 'genre') return 2.5;
+      if (!matchesLens) return -1;
+      if (node.type === 'artist') {
+        if ((node.globalRank ?? 999) < 40 || (node.normScore ?? 0) > 0.45) return 1;
+        return 2;
+      }
+      if (node.type === 'track') {
+        if ((node.normScore ?? 0) > 0.42 || (node.history?.plays ?? 0) >= 20) return 1.5;
+        if ((node.history?.plays ?? 0) >= 8) return 3;
+      }
+      return -1;
+    }
+
     if (node.type === 'genre') return 1;
     if (node.isWormholeBridge) return 2;
     if (node.type === 'artist') {
-      // Your overall favourites are always named; then each cluster's top few.
       if ((node.globalRank ?? 99) < TOP_ARTISTS_OVERALL) return 2;
       if ((node.labelRank ?? 99) < TOP_ARTISTS_PER_CLUSTER) return 3 + node.labelRank;
     }
     return -1;
   }
 
-  update(nodes, camera, activeNode, scaleMultiplier = 1.0, labelsVisible = true) {
+  update(nodes, camera, activeNode, scaleMultiplier = 1.0, labelsVisible = true, activeLens = 'all') {
     if (!labelsVisible) {
       this.container.style.display = 'none';
       return;
@@ -113,9 +145,10 @@ export class LabelProjector {
     const w = window.innerWidth;
     const h = window.innerHeight;
     const candidates = [];
+    const hasLens = Boolean(activeLens && activeLens !== 'all');
 
     for (const node of nodes) {
-      const priority = (node.meshGroup && !node.meshGroup.visible) ? -1 : this.priorityOf(node, activeNode);
+      const priority = (node.meshGroup && !node.meshGroup.visible) ? -1 : this.priorityOf(node, activeNode, activeLens);
       if (priority < 0) continue;
 
       tempProjVec.copy(node.position);
@@ -124,25 +157,27 @@ export class LabelProjector {
       if (tempProjVec.z > 1 || tempProjVec.z < -1 || Math.abs(tempProjVec.x) > 1.1 || Math.abs(tempProjVec.y) > 1.1) continue;
 
       candidates.push({
-        node, el: this.ensureLabel(node), priority,
+        node,
+        el: this.ensureLabel(node),
+        priority,
         x: (tempProjVec.x * 0.5 + 0.5) * w,
         y: (-tempProjVec.y * 0.5 + 0.5) * h,
         depth: tempProjVec.z
       });
     }
 
-    // Highest priority first; among equals, nearer to the camera first.
     candidates.sort((a, b) => a.priority - b.priority || a.depth - b.depth);
     this.placed.length = 0;
     const shownNow = new Set();
 
     for (const c of candidates) {
-      if (!c.node.labelSize) {
-        // Measure once; labels don't change size afterwards.
-        c.node.labelSize = { w: c.el.offsetWidth || 80, h: c.el.offsetHeight || 22 };
+      const showBadge = hasLens || (activeNode && c.priority <= 2.8);
+      if (!c.node.labelSize || c.node._measuredBadge !== showBadge) {
+        c.el.classList.toggle('with-badge', Boolean(showBadge));
+        c.node.labelSize = { w: c.el.offsetWidth || 96, h: c.el.offsetHeight || 22 };
+        c.node._measuredBadge = showBadge;
       }
       const { w: lw, h: lh } = c.node.labelSize;
-      // Preferred spot is above the body; if taken, try below, right, then left.
       const spots = [[0, 0], [0, lh + 16], [lw / 2 + 14, lh / 2 + 8], [-(lw / 2 + 14), lh / 2 + 8]];
       let placedAt = null;
       for (const [dx, dy] of spots) {
@@ -160,12 +195,17 @@ export class LabelProjector {
       c.x = placedAt.x;
       c.y = placedAt.y;
 
-      const focused = activeNode && (c.priority <= 2);
-      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.8'));
-      this.show(c.el, `translate(-50%, -100%) translate3d(${c.x.toFixed(0)}px, ${c.y.toFixed(0)}px, 0)`, opacity, c.priority === 0);
+      const focused = activeNode && (c.priority <= 2.5);
+      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.88'));
+      this.show(
+        c.el,
+        `translate(-50%, -100%) translate3d(${c.x.toFixed(0)}px, ${c.y.toFixed(0)}px, 0)`,
+        opacity,
+        c.priority === 0,
+        showBadge
+      );
       shownNow.add(c.el);
     }
-    // Hide only what was shown last frame and isn't now (no per-node DOM work).
     this.shown.forEach(el => { if (!shownNow.has(el)) this.hide(el); });
     this.shown = shownNow;
   }

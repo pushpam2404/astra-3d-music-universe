@@ -11,6 +11,12 @@ docs/
 .env.local
 .env.*.local
 
+# Local Personal Listening Archives
+Spotify Extended Streaming History/
+Spotify Account Data/
+MyData/
+Modelfile.official
+
 # OS Metadata
 .DS_Store
 Thumbs.db

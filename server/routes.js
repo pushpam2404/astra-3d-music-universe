@@ -6,6 +6,7 @@ import { getSession, saveSession, destroySession, parseCookies, setCookie } from
 import { buildAuthorizeUrl, exchangeCode, createApi, SpotifyError } from './spotify.js';
 import { buildUniverseDataset } from './universeBuilder.js';
 import { enrichArtists, toCacheEntry } from './enrich.js';
+import { getLocalHistorySummary, getLocalHistoryStatus } from './historyLoader.js';
 
 const STATE_COOKIE = 'astra_oauth_state';
 
@@ -14,13 +15,19 @@ export const apiRouter = express.Router();
 apiRouter.get('/auth/status', (req, res) => {
   const session = getSession(req);
   const granted = new Set((session?.scope || '').split(' '));
+  const localHistory = getLocalHistoryStatus();
   res.json({
     configured: isSpotifyConfigured(),
     loggedIn: Boolean(session),
     // Sessions from before a scope was added need a fresh login to grant it.
     missingScopes: session ? REQUIRED_SCOPES.filter(s => !granted.has(s)) : [],
-    redirectUri: getRedirectUri(req)
+    redirectUri: getRedirectUri(req),
+    localHistory
   });
+});
+
+apiRouter.get('/history/status', (req, res) => {
+  res.json(getLocalHistoryStatus());
 });
 
 apiRouter.get('/auth/login', (req, res) => {
@@ -55,12 +62,15 @@ apiRouter.post('/auth/logout', (req, res) => {
   res.json({ ok: true });
 });
 
-// Background genre lookups for artists the universe load didn't get to. Small batches,
-// so each call stays well inside serverless time limits.
+// Background genre lookups for artists the universe load didn't get to.
+// Works both when logged into Spotify and when exploring imported streaming history.
 const ENRICH_BATCH_MAX = 50;
 const ENRICH_BUDGET_MS = 15000;
-apiRouter.post('/enrich', express.json({ limit: '200kb' }), async (req, res) => {
-  if (!getSession(req)) return res.status(401).json({ error: 'Not connected to Spotify.' });
+apiRouter.post('/enrich', express.json({ limit: '500kb' }), async (req, res) => {
+  const hasLocalHistory = getLocalHistoryStatus().available;
+  if (!getSession(req) && !hasLocalHistory && !req.body?.allowHistoryEnrich) {
+    return res.status(401).json({ error: 'Not connected to Spotify.' });
+  }
   const artists = (Array.isArray(req.body?.artists) ? req.body.artists : [])
     .filter(a => a && typeof a.id === 'string' && typeof a.name === 'string')
     .slice(0, ENRICH_BATCH_MAX)
@@ -71,24 +81,31 @@ apiRouter.post('/enrich', express.json({ limit: '200kb' }), async (req, res) => 
   res.json({ artistMeta, warnings: result.warnings });
 });
 
-// POST carries the artist metadata the browser already learned (its persistent cache).
-apiRouter.post('/universe', express.json({ limit: '2mb' }), universeHandler);
+// POST carries the artist metadata the browser already learned (`knownMeta`) and optional
+// browser-imported `historySummary` (or falls back to the local history folder on disk).
+apiRouter.post('/universe', express.json({ limit: '25mb' }), universeHandler);
 apiRouter.get('/universe', universeHandler);
 
 async function universeHandler(req, res) {
   const session = getSession(req);
-  if (!session) return res.status(401).json({ error: 'Not connected to Spotify.' });
-
   const knownMeta = req.body && typeof req.body.knownMeta === 'object' ? req.body.knownMeta : {};
+  const clientHistory = req.body?.historySummary?.isAstraHistorySummary ? req.body.historySummary : null;
+  const useLocal = req.body?.useLocalHistory !== false;
+  const historySummary = clientHistory || (useLocal ? getLocalHistorySummary() : null);
+
+  if (!session && !historySummary) {
+    return res.status(401).json({ error: 'Not connected to Spotify and no streaming history loaded.' });
+  }
+
   try {
-    const result = await buildUniverseDataset(createApi(session, (s) => saveSession(req, res, s)), { knownMeta });
+    const api = session ? createApi(session, (s) => saveSession(req, res, s)) : null;
+    const result = await buildUniverseDataset(api, { knownMeta, historySummary });
     console.log('[universe]', JSON.stringify(result.diagnostics));
     res.json(result);
   } catch (err) {
     console.error('[universe] failed:', err.status, err.endpoint, err.message);
     if (err instanceof SpotifyError) {
       if (err.status === 400 && err.endpoint === '/api/token') {
-        // Refresh token revoked or invalid.
         destroySession(req, res);
         return res.status(401).json({ error: 'Spotify session expired. Please reconnect.' });
       }

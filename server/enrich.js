@@ -6,7 +6,7 @@
  * For each artist: Wikidata (genres, country, occupation) and MusicBrainz (country,
  * tags) by exact Spotify id, plus Last.fm tags (via the artist's most-played song,
  * which tells same-name artists apart). The browser stores the results and sends them
- * back as `knownMeta`, so nothing needs a database.
+ * back as `knownMeta`, so nothing needs a database and no artists are hardcoded.
  */
 import { normalizeGenre, OCCUPATION_GENRES } from '../src/config/genreTaxonomy.js';
 import { fetchWikidataArtistMeta } from './genreEnrichment.js';
@@ -41,12 +41,14 @@ export const cleanList = (list, max) => (Array.isArray(list) ? list.filter(x => 
  */
 export async function enrichArtists(artists, budgetMs) {
   const warnings = [];
-  const ids = artists.map(a => a.id);
+  // Only query Wikidata and MusicBrainz for real 22-char Spotify artist IDs;
+  // Last.fm looks up by artist name + signature track so it works for all artists.
+  const spotifyIds = artists.map(a => a.id).filter(id => /^[0-9A-Za-z]{22}$/.test(id));
   const noMeta = { metaById: new Map() };
-  const [wd, mb, lf] = ids.length
+  const [wd, mb, lf] = artists.length
     ? await Promise.all([
-      fetchWikidataArtistMeta(ids),
-      fetchMusicBrainzArtistMeta(ids),
+      spotifyIds.length ? fetchWikidataArtistMeta(spotifyIds) : noMeta,
+      spotifyIds.length ? fetchMusicBrainzArtistMeta(spotifyIds) : noMeta,
       fetchLastfmTags(artists, budgetMs)
     ])
     : [noMeta, noMeta, { tagsById: new Map(), viaById: new Map(), looked: 0, viaTrack: 0, skipped: 0 }];

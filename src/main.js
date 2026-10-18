@@ -4,9 +4,18 @@ import { GALAXY_PRESETS } from './config/presets.js';
 import { buildUniverseGraph } from './etl/graphNormalizer.js';
 import { getAuthStatus, fetchUniverse, enrichArtists } from './api/backendClient.js';
 import { loadArtistMeta, saveArtistMeta } from './api/artistMetaCache.js';
+import {
+  loadStoredHistorySummary,
+  saveStoredHistorySummary,
+  loadStoredUniverseSnapshot,
+  saveStoredUniverseSnapshot,
+  parseImportedFiles,
+  exportUniverseSnapshotJson,
+  exportListeningHistoryCsv
+} from './api/historyStorage.js';
 import { createUniverseScene } from './renderer/universeScene.js';
 import { initPostProcessing, BLOOM_STRENGTH } from './renderer/postProcessing.js';
-import { CelestialFactory } from './renderer/celestialFactory.js';
+import { CelestialFactory, nodeMatchesLens } from './renderer/celestialFactory.js';
 import { GalaxyLayoutEngine } from './physics/galaxyLayout.js';
 import { CameraFlightController } from './renderer/cameraController.js';
 import { LabelProjector } from './renderer/labelProjector.js';
@@ -15,6 +24,9 @@ import { DetailPanel } from './ui/detailPanel.js';
 
 const AppState = {
   isDemo: true,
+  rawDataset: null,
+  historySummary: null,
+  activeLens: 'all',
   nodeScaleMultiplier: 1.0,
   layers: { genres: true, artists: true, tracks: true, edges: true, labels: true },
   nodes: [],
@@ -26,21 +38,17 @@ const AppState = {
 };
 
 const ENRICH_BATCH = 40;
-const plural = (n, one, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+const plural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString()} ${n === 1 ? one : many}`;
 
 async function initApp() {
   const { scene, camera, renderer, controls } = createUniverseScene(document.getElementById('webgl-canvas-container'));
   const { composer, bloomPass } = initPostProcessing(renderer, scene, camera);
 
-  // Center the galaxy in the area the side panel leaves visible (right column on wide
-  // screens, bottom sheet on phones), not in the whole window.
-  // On phones the shift follows the bottom sheet, eased so the galaxy glides up/down.
   const viewShift = { x: 0, y: 0, tx: 0, ty: 0 };
-  let sheetCover = () => 84; // replaced once the HUD exists
+  let sheetCover = () => 84;
   function updateViewOffset(snap = false) {
     const narrow = window.innerWidth <= 760;
-    viewShift.tx = narrow ? 0 : (320 + 16) / 2;
-    // Centre in the gap between the top bar and the sheet.
+    viewShift.tx = narrow ? 0 : (340 + 16) / 2;
     const barBottom = narrow ? document.getElementById('top-bar').getBoundingClientRect().bottom : 0;
     viewShift.ty = narrow ? (sheetCover() - barBottom) / 2 : 0;
     if (snap === true) { viewShift.x = viewShift.tx; viewShift.y = viewShift.ty; }
@@ -69,6 +77,7 @@ async function initApp() {
   // ---------- Selection ----------
 
   function selectNode(node) {
+    if (!node) return;
     AppState.selectedNode = node;
     cameraController.flyToNode(node);
     detailPanel.render(node);
@@ -86,7 +95,8 @@ async function initApp() {
     onSelect: selectNode,
     onFly: (node) => cameraController.flyToNode(node),
     isDemo: () => AppState.isDemo,
-    likedSongsConnected: () => !authStatus.missingScopes?.includes('user-library-read')
+    likedSongsConnected: () => !authStatus.missingScopes?.includes('user-library-read'),
+    getActiveLens: () => AppState.activeLens
   });
 
   const hud = new Hud(AppState, {
@@ -100,6 +110,10 @@ async function initApp() {
       cameraController.resetOverview();
     },
     onLayersChange: applyLayerVisibility,
+    onLensChange: () => {
+      factory.focusKey = null;
+      if (AppState.selectedNode) detailPanel.render(AppState.selectedNode);
+    },
     onSheetChange: () => updateViewOffset(),
     onGlow: (level) => {
       bloomPass.strength = BLOOM_STRENGTH * level;
@@ -115,12 +129,56 @@ async function initApp() {
       layout.nodeScaleMultiplier = scale;
       AppState.nodes.forEach(n => n.meshGroup?.scale.setScalar(scale));
     },
-    onDisconnected: () => loadDemo()
+    onClusterSpread: (spread) => {
+      layout.clusterSpreadMultiplier = spread;
+      layout.boundingRadius = layout.bounds[layout.mode] * spread;
+      cameraController.setSceneRadius(layout.boundingRadius);
+    },
+    onImportFiles: async (fileList) => {
+      const parsed = await parseImportedFiles(fileList);
+      if (parsed.kind === 'snapshot') {
+        if (parsed.artistMeta) saveArtistMeta(parsed.artistMeta);
+        if (parsed.historySummary) {
+          AppState.historySummary = parsed.historySummary;
+          await saveStoredHistorySummary(parsed.historySummary);
+        }
+        await saveStoredUniverseSnapshot(parsed.snapshot);
+        AppState.isDemo = false;
+        loadDataset(parsed.dataset);
+        updateUniverseCaption(parsed.dataset);
+        hud.setNotice(`Loaded universe snapshot (${parsed.fileNames[0]}).`);
+        return;
+      }
+
+      AppState.historySummary = parsed.historySummary;
+      await saveStoredHistorySummary(parsed.historySummary);
+      await saveStoredUniverseSnapshot(null);
+      await loadLive({ historySummary: parsed.historySummary });
+    },
+    onUseLocalHistory: async () => {
+      AppState.historySummary = null;
+      await saveStoredHistorySummary(null);
+      await saveStoredUniverseSnapshot(null);
+      await loadLive({ useLocalHistory: true });
+    },
+    onExportJson: () => {
+      exportUniverseSnapshotJson(AppState.rawDataset, loadArtistMeta(), AppState.historySummary);
+    },
+    onExportCsv: () => {
+      exportListeningHistoryCsv(AppState.rawDataset);
+    },
+    onDisconnected: () => {
+      if (authStatus.localHistory?.available || AppState.historySummary) {
+        loadLive({ historySummary: AppState.historySummary });
+      } else {
+        loadDemo();
+      }
+    }
   });
   sheetCover = () => hud.sheetCover();
   updateViewOffset(true);
 
-  // ---------- Pointer: hover and click on the canvas only ----------
+  // ---------- Pointer: hover and click on the canvas ----------
 
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2(-9, -9);
@@ -131,19 +189,17 @@ async function initApp() {
   renderer.domElement.addEventListener('pointerleave', () => pointer.set(-9, -9));
   renderer.domElement.addEventListener('pointerdown', (e) => { downAt = { x: e.clientX, y: e.clientY }; });
   renderer.domElement.addEventListener('pointerup', (e) => {
-    // A drag rotates the view; only a tap/click selects. Fingers wobble more than mice.
     const touch = e.pointerType !== 'mouse';
     const moved = downAt ? Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) : Infinity;
     if (moved <= (touch ? 10 : 5)) {
       setPointer(e);
-      const node = pickNode() || pickNearest(e.clientX, e.clientY, touch ? 26 : 8);
+      const node = pickNode() || pickNearest(e.clientX, e.clientY, touch ? 26 : 10);
       if (node) {
         selectNode(node);
         if (touch) navigator.vibrate?.(8);
       } else if (AppState.selectedNode) clearSelection();
       else if (touch && hud.sheetOpen) hud.setSheet(false);
     }
-    // Touch has no hover: don't leave a phantom hover where the finger lifted.
     if (touch) pointer.set(-9, -9);
   });
   renderer.domElement.addEventListener('pointercancel', () => pointer.set(-9, -9));
@@ -151,13 +207,20 @@ async function initApp() {
     if (e.key === 'Escape' && AppState.selectedNode && document.activeElement?.tagName !== 'INPUT') clearSelection();
   });
 
-  /** Closest sun or artist on screen within `radius` px: small planets are hard to tap exactly. */
+  /** Closest sun, artist, or highlighted song moon on screen within `radius` px. */
   function pickNearest(x, y, radius) {
     let best = null, bestD = radius;
     const v = new THREE.Vector3();
+    const hasLens = AppState.activeLens && AppState.activeLens !== 'all';
     for (const n of AppState.nodes) {
-      if (n.type === 'track' || !n.position || n.meshGroup?.visible === false) continue;
+      if (!n.position || n.meshGroup?.visible === false) continue;
       if (n.type === 'artist' && !AppState.layers.artists) continue;
+      if (n.type === 'track') {
+        if (!AppState.layers.tracks) continue;
+        // Allow tapping moons when zoomed in, when a node is selected, or when a lens highlights them
+        if (!AppState.selectedNode && !hasLens) continue;
+        if (hasLens && !nodeMatchesLens(n, AppState.activeLens)) continue;
+      }
       v.copy(n.position).project(camera);
       if (v.z > 1) continue;
       const d = Math.hypot((v.x + 1) / 2 * window.innerWidth - x, (1 - v.y) / 2 * window.innerHeight - y);
@@ -171,16 +234,36 @@ async function initApp() {
     const meshes = [];
     AppState.nodes.forEach(n => { if (n.sphereMesh && n.meshGroup?.visible) meshes.push(n.sphereMesh); });
     if (factory.artistMesh && AppState.layers.artists) meshes.push(factory.artistMesh);
-    // Moons are only pickable once something is selected: testing thousands of them on
-    // every hover isn't worth it, and moons only matter up close.
-    if (factory.trackMesh && AppState.layers.tracks && AppState.selectedNode) meshes.push(factory.trackMesh);
+    const zoomedIn = camera.position.length() < layout.boundingRadius * 0.95;
+    const hasLens = AppState.activeLens && AppState.activeLens !== 'all';
+    if (factory.trackMesh && AppState.layers.tracks && (AppState.selectedNode || hasLens || zoomedIn)) {
+      meshes.push(factory.trackMesh);
+    }
     const hit = raycaster.intersectObjects(meshes, false)[0];
     return hit ? factory.nodeFromHit(hit) : null;
   }
 
   // ---------- Building a universe ----------
 
+  function updateUniverseCaption(dataset) {
+    const hm = dataset.historyMeta;
+    if (hm?.validPlays) {
+      const years = Object.keys(hm.years || {}).sort();
+      const span = years.length ? `${years[0]}–${years[years.length - 1]}` : '';
+      hud.setCaption(
+        dataset.name || 'Your music universe',
+        `${plural(dataset.artists.length, 'artist')} & ${plural(dataset.tracks.length, 'song')} in ${plural(dataset.genres.length, 'cluster')} · ${hm.validPlays.toLocaleString()} plays (${hm.totalHours?.toLocaleString() || '—'} hrs${span ? `, ${span}` : ''})`
+      );
+    } else {
+      hud.setCaption(
+        'Your music universe',
+        `${plural(dataset.artists.length, 'artist')} and ${plural(dataset.tracks.length, 'song')} in ${plural(dataset.genres.length, 'cluster')}`
+      );
+    }
+  }
+
   function loadDataset(rawDataset) {
+    AppState.rawDataset = rawDataset;
     AppState.nodes.forEach(n => { if (n.meshGroup?.isObject3D) scene.remove(n.meshGroup); });
     if (edgeGroup) scene.remove(edgeGroup);
     factory.solarMaterials = [];
@@ -206,7 +289,9 @@ async function initApp() {
 
     suns = AppState.nodes.filter(n => n.type === 'genre');
     labelProjector.syncLabels(AppState.nodes, selectNode);
-    hud.renderClusters(AppState.nodes.filter(n => n.type === 'genre'));
+    hud.setLensBarVisible(Boolean(!AppState.isDemo || rawDataset.historyMeta));
+    hud.updateHistoryButtonBadge();
+    hud.renderClusters(suns);
     hud.showClusters();
     hud.restoreSettings();
     applyLayerVisibility();
@@ -224,14 +309,17 @@ async function initApp() {
   function loadDemo() {
     AppState.isDemo = true;
     loadDataset(GALAXY_PRESETS.cosmic_synth);
-    hud.setCaption('A demo universe', 'Connect Spotify to map your own listening.');
+    hud.setCaption('A demo universe', 'Connect Spotify or import your listening history to map your own music.');
     hud.setNotice(null);
   }
 
-  async function loadLive() {
+  async function loadLive({ historySummary = AppState.historySummary, useLocalHistory = true } = {}) {
     hud.setLoading(true);
     try {
-      const { dataset, artistMeta, diagnostics } = await fetchUniverse(loadArtistMeta());
+      const { dataset, artistMeta, diagnostics } = await fetchUniverse(loadArtistMeta(), {
+        historySummary,
+        useLocalHistory
+      });
       saveArtistMeta(artistMeta);
       console.info('[Astra] universe diagnostics:', diagnostics);
       if (!dataset) {
@@ -241,32 +329,29 @@ async function initApp() {
       }
       AppState.isDemo = false;
       loadDataset(dataset);
-      hud.setCaption('Your music universe', `${plural(dataset.artists.length, 'artist')} and ${plural(dataset.tracks.length, 'song')} in ${plural(dataset.genres.length, 'cluster')}`);
+      updateUniverseCaption(dataset);
 
-      if (authStatus.missingScopes?.includes('user-library-read')) {
+      if (authStatus.loggedIn && authStatus.missingScopes?.includes('user-library-read')) {
         hud.setNotice('Your Liked Songs aren’t included yet.', { label: 'Reconnect Spotify', run: () => document.getElementById('spotify-btn').click() });
+      } else if (!authStatus.loggedIn && dataset.historyMeta) {
+        hud.setNotice('Mapped from your streaming history. Connect Spotify anytime to merge live top charts & Liked Songs.');
       } else {
         hud.setNotice(null);
       }
       if (diagnostics.pendingArtists?.length) enrichInBackground(diagnostics.pendingArtists);
     } catch (err) {
-      console.error('Failed to load Spotify universe:', err);
+      console.error('Failed to load universe:', err);
       loadDemo();
       if (err.status === 401) {
         authStatus = { ...authStatus, loggedIn: false };
         hud.setAuthStatus(authStatus);
       }
-      hud.setNotice(err.message, err.status === 401 || err.status === 429 ? null : { label: 'Try again', run: loadLive });
+      hud.setNotice(err.message, err.status === 401 || err.status === 429 ? null : { label: 'Try again', run: () => loadLive({ historySummary, useLocalHistory }) });
     } finally {
       hud.setLoading(false);
     }
   }
 
-  /**
-   * Looks up genres for the artists the load didn't get to, a batch at a time, while
-   * the page is open. Progress is saved in the browser, so closing the tab loses
-   * nothing; "Update map" re-arranges the universe with what was learned.
-   */
   let enrichRun = 0;
   async function enrichInBackground(pending) {
     const run = ++enrichRun;
@@ -296,7 +381,13 @@ async function initApp() {
   const authError = new URLSearchParams(window.location.search).get('auth_error');
   if (authError) window.history.replaceState({}, document.title, window.location.pathname);
 
-  authStatus = await getAuthStatus();
+  const [status, storedHistory, storedSnapshot] = await Promise.all([
+    getAuthStatus(),
+    loadStoredHistorySummary(),
+    loadStoredUniverseSnapshot()
+  ]);
+  authStatus = status;
+  AppState.historySummary = storedHistory;
   hud.setAuthStatus(authStatus);
 
   // ---------- Frame loop ----------
@@ -317,11 +408,10 @@ async function initApp() {
     factory.updatePulses(AppState.pulseParticles, layout.orbitMultiplier);
     factory.updateSolarShaders(now * 0.001);
     factory.updateNebulae(camera, suns);
-    factory.updateFocus(AppState.selectedNode || AppState.hoveredNode, AppState.nodes, AppState.edges);
+    factory.updateFocus(AppState.selectedNode || AppState.hoveredNode, AppState.nodes, AppState.edges, AppState.activeLens);
 
     cameraController.update(AppState.selectedNode);
 
-    // Hover every 3rd frame: raycasting thousands of moons isn't free.
     if (frame++ % 3 === 0) {
       const hovered = pickNode();
       if (hovered !== AppState.hoveredNode) {
@@ -330,19 +420,29 @@ async function initApp() {
       }
     }
 
-    labelProjector.update(AppState.nodes, camera, AppState.selectedNode || AppState.hoveredNode, AppState.nodeScaleMultiplier, AppState.layers.labels);
+    labelProjector.update(
+      AppState.nodes,
+      camera,
+      AppState.selectedNode || AppState.hoveredNode,
+      AppState.nodeScaleMultiplier,
+      AppState.layers.labels,
+      AppState.activeLens
+    );
     composer.render();
   }
   requestAnimationFrame(animate);
 
-  if (authStatus.loggedIn && !authError) {
-    await loadLive();
+  if (storedSnapshot?.dataset && !authStatus.loggedIn) {
+    AppState.isDemo = false;
+    loadDataset(storedSnapshot.dataset);
+    updateUniverseCaption(storedSnapshot.dataset);
+  } else if ((authStatus.loggedIn && !authError) || authStatus.localHistory?.available || storedHistory) {
+    await loadLive({ historySummary: storedHistory, useLocalHistory: true });
   } else {
     loadDemo();
     if (authError) hud.setNotice(`Spotify login didn’t complete: ${authError}`);
   }
 
-  // Dev-only hook for loading arbitrary datasets from the console.
   if (import.meta.env.DEV) window.__astra = { loadDataset, AppState };
 }
 

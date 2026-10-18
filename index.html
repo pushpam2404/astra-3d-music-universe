@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Astra · your music, mapped</title>
-  <meta name="description" content="Connect Spotify and see everything you listen to as a galaxy: genres as suns, artists as planets, songs as moons.">
+  <meta name="description" content="Connect Spotify and import your streaming history to explore everything you listen to as a 3D galaxy: genres as suns, artists as planets, songs as moons.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -22,16 +22,36 @@
     </div>
 
     <div class="search" role="search">
-      <input type="search" id="search-input" placeholder="Find an artist, song or cluster" autocomplete="off" aria-label="Search your universe">
+      <input type="search" id="search-input" placeholder="Find an artist, song, cluster or era (e.g. 2024, dormant)" autocomplete="off" aria-label="Search your universe">
       <ul id="search-results" role="listbox" hidden></ul>
     </div>
 
     <div class="top-actions">
-      <button id="view-toggle-btn" class="btn btn-quiet" aria-expanded="false" aria-controls="view-panel">View</button>
-      <button id="reset-camera-btn" class="btn btn-quiet">Show everything</button>
-      <button id="spotify-btn" class="btn btn-spotify">Connect Spotify</button>
+      <button id="history-btn" class="btn btn-history" type="button" title="Import or export listening history">History</button>
+      <button id="view-toggle-btn" class="btn btn-quiet" type="button" aria-expanded="false" aria-controls="view-panel">View</button>
+      <button id="reset-camera-btn" class="btn btn-quiet" type="button">Show everything</button>
+      <button id="spotify-btn" class="btn btn-spotify" type="button">Connect Spotify</button>
     </div>
   </header>
+
+  <!-- Time & Memory Lens bar: highlights past favorites, dormant tracks, or specific eras -->
+  <nav id="lens-bar" aria-label="Listening memory and era lenses" hidden>
+    <div class="lens-scroll">
+      <button type="button" class="lens-pill is-active" data-lens="all">All time</button>
+      <button type="button" class="lens-pill" data-lens="past_fav" title="Heavily played in earlier eras, rarely played recently">Past favorites</button>
+      <button type="button" class="lens-pill" data-lens="dormant" title="Songs and artists you loved but haven't heard in 4+ months">Haven’t heard in a while</button>
+      <button type="button" class="lens-pill" data-lens="current_rotation" title="Actively played in the last 60 days or current top charts">Current rotation</button>
+      <button type="button" class="lens-pill" data-lens="all_time_staple" title="Played consistently across 3+ years">All-time staples</button>
+      <span class="lens-divider" aria-hidden="true"></span>
+      <button type="button" class="lens-pill" data-lens="era_2026">2026</button>
+      <button type="button" class="lens-pill" data-lens="early_2025">Early 2025</button>
+      <button type="button" class="lens-pill" data-lens="era_2025">2025</button>
+      <button type="button" class="lens-pill" data-lens="early_2024">Early 2024</button>
+      <button type="button" class="lens-pill" data-lens="era_2024">2024</button>
+      <button type="button" class="lens-pill" data-lens="era_2023">2023</button>
+      <button type="button" class="lens-pill" data-lens="era_2020_2022">2020–22</button>
+    </div>
+  </nav>
 
   <!-- View settings popover -->
   <section id="view-panel" class="panel" hidden aria-label="View settings">
@@ -55,18 +75,31 @@
       <span>Planet size <output id="node-scale-val">1×</output></span>
       <input type="range" id="node-scale-slider" min="0.5" max="2" step="0.1" value="1">
     </label>
+    <label class="slider">
+      <span>Cluster spacing <output id="cluster-spread-val">1×</output></span>
+      <input type="range" id="cluster-spread-slider" min="0.6" max="2.2" step="0.05" value="1">
+    </label>
   </section>
 
-  <!-- Right column: the cluster list, or details of whatever is selected. Never both. -->
+  <!-- Right column: cluster/memory/song explorer, or details of whatever is selected. -->
   <aside id="side-panel" class="panel" aria-live="polite">
-    <!-- Phones only: drag or tap to raise / lower the bottom sheet -->
     <button id="sheet-handle" type="button" aria-label="Show clusters" aria-expanded="false"><span></span></button>
     <div id="cluster-view">
-      <h2 class="panel-heading">Clusters</h2>
+      <div class="panel-header-row">
+        <h2 class="panel-heading" id="side-panel-heading">Clusters</h2>
+        <div class="panel-tabs" role="tablist" aria-label="Explorer view">
+          <button type="button" role="tab" id="tab-clusters" class="panel-tab is-active" aria-selected="true" data-tab="clusters">Clusters</button>
+          <button type="button" role="tab" id="tab-memories" class="panel-tab" aria-selected="false" data-tab="memories">Memories</button>
+          <button type="button" role="tab" id="tab-songs" class="panel-tab" aria-selected="false" data-tab="songs">Songs</button>
+        </div>
+      </div>
+      <p id="active-lens-banner" class="lens-banner" hidden></p>
       <ol id="cluster-list"></ol>
+      <div id="memories-list" hidden></div>
+      <div id="songs-browser" hidden></div>
     </div>
     <div id="detail-view" hidden>
-      <button id="detail-back-btn" class="btn btn-quiet btn-back">All clusters</button>
+      <button id="detail-back-btn" class="btn btn-quiet btn-back" type="button">All clusters</button>
       <div id="detail-content"></div>
     </div>
   </aside>
@@ -82,13 +115,49 @@
   <div id="loading-overlay" hidden>
     <div class="loading-card">
       <div class="loading-orbit" aria-hidden="true"><span></span></div>
-      <p class="loading-title">Charting your universe</p>
-      <p class="loading-text">Reading your top charts, recent plays and Liked Songs, then grouping every artist by sound. The first visit takes about half a minute.</p>
+      <p class="loading-title" id="loading-title-text">Charting your universe</p>
+      <p class="loading-text" id="loading-body-text">Merging your Spotify listening history, top charts and Liked Songs, then grouping every artist by sound.</p>
     </div>
   </div>
 
+  <!-- History Import & Export Dialog -->
+  <dialog id="history-dialog" class="modal-dialog">
+    <div class="modal-header">
+      <h2>Listening History · Import &amp; Export</h2>
+      <button type="button" id="history-close-btn" class="btn btn-quiet" aria-label="Close">✕</button>
+    </div>
+    <p class="modal-lead">Merge your Spotify Extended Streaming History (<code>Streaming_History_Audio_*.json</code>) or standard Account Data with your live Spotify stats to uncover past favorites, dormant gems and 2020–2026 eras.</p>
+
+    <div id="history-status-box" class="history-status-box"></div>
+
+    <div class="modal-section">
+      <h3>Import History or Snapshot</h3>
+      <div id="history-dropzone" class="history-dropzone">
+        <p class="dropzone-title">Drop your Spotify History folder or <code>.json</code> files here</p>
+        <p class="dropzone-sub">Accepts <code>Streaming_History_Audio_*.json</code>, <code>StreamingHistory_music_*.json</code>, or an exported <code>astra-universe-*.json</code> snapshot.</p>
+        <div class="dropzone-actions">
+          <button type="button" id="import-folder-btn" class="btn btn-starlight">Choose History Folder</button>
+          <button type="button" id="import-files-btn" class="btn">Choose JSON Files</button>
+          <button type="button" id="use-local-history-btn" class="btn" hidden>Sync Local Folder</button>
+        </div>
+        <input type="file" id="history-folder-input" webkitdirectory directory multiple hidden>
+        <input type="file" id="history-files-input" accept=".json,application/json" multiple hidden>
+      </div>
+      <p id="history-feedback" class="history-feedback" hidden></p>
+    </div>
+
+    <div class="modal-section">
+      <h3>Export Your Universe</h3>
+      <p class="modal-sub">Save your compiled 3D galaxy (clusters, 3D coordinates, cached genres and multi-year history) or download a complete spreadsheet of every artist and song.</p>
+      <div class="modal-export-actions">
+        <button type="button" id="export-json-btn" class="btn btn-starlight">Export Universe Snapshot (.json)</button>
+        <button type="button" id="export-csv-btn" class="btn">Export Listening Summary (.csv)</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- Shown only when the server has no Spotify credentials -->
-  <dialog id="setup-dialog">
+  <dialog id="setup-dialog" class="modal-dialog">
     <h2>Spotify isn't set up on this server</h2>
     <p>Add <code>SPOTIFY_CLIENT_ID</code> and <code>SPOTIFY_CLIENT_SECRET</code> to the server's environment, and register this redirect URI in your Spotify app:</p>
     <p><code id="setup-redirect-uri"></code></p>

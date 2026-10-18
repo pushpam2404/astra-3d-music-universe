@@ -72,13 +72,23 @@ const overlaps = (a, b) => a.includes(b) || b.includes(a);
 export function describeClusters(clusters, uncharted, byId, n) {
   const scoreOf = (id) => byId.get(id).score || 1;
 
-  // Library-wide frequencies for lift.
+  // Library-wide frequencies for lift (measured over artists that actually have genres/countries).
   const genreDf = new Map();
   const countryDf = new Map();
+  let genreKnownN = 0;
+  let countryKnownN = 0;
   byId.forEach(a => {
-    new Set(a.genres).forEach(g => genreDf.set(g, (genreDf.get(g) || 0) + 1));
-    new Set(a.countries).forEach(c => countryDf.set(c, (countryDf.get(c) || 0) + 1));
+    if (a.genres?.length) {
+      genreKnownN++;
+      new Set(a.genres).forEach(g => genreDf.set(g, (genreDf.get(g) || 0) + 1));
+    }
+    if (a.countries?.length) {
+      countryKnownN++;
+      new Set(a.countries).forEach(c => countryDf.set(c, (countryDf.get(c) || 0) + 1));
+    }
   });
+  genreKnownN = Math.max(1, genreKnownN || n);
+  countryKnownN = Math.max(1, countryKnownN || n);
 
   const usedNames = new Set();
   const familyUse = new Map();
@@ -90,7 +100,8 @@ export function describeClusters(clusters, uncharted, byId, n) {
     .sort((A, B) => B.reduce((s, id) => s + scoreOf(id), 0) - A.reduce((s, id) => s + scoreOf(id), 0));
 
   sortedClusters.forEach(members => {
-    const size = members.length;
+    const genreRichSize = Math.max(1, members.filter(id => byId.get(id).genres?.length).length);
+    const countryRichSize = Math.max(1, members.filter(id => byId.get(id).countries?.length).length);
     const famScore = {};
     const genreCount = new Map();
     const countryCount = new Map();
@@ -101,25 +112,25 @@ export function describeClusters(clusters, uncharted, byId, n) {
       new Set(a.countries).forEach(c => countryCount.set(c, (countryCount.get(c) || 0) + 1));
     });
 
-    // Distinctive genres: support × log-lift, broad genres discounted.
-    const minSupport = Math.max(2, Math.ceil(size * 0.15));
+    // Distinctive genres: support × log-lift over genre-known members in the cluster.
+    const minSupport = Math.max(2, Math.ceil(genreRichSize * 0.14));
     const ranked = [...genreCount.entries()]
-      .filter(([g, c]) => c >= Math.min(minSupport, size) && !PLACE_TAGS.has(g))
+      .filter(([g, c]) => c >= Math.min(minSupport, genreRichSize) && !PLACE_TAGS.has(g))
       .map(([g, c]) => {
-        const support = c / size;
-        const lift = support / (genreDf.get(g) / n);
+        const support = c / genreRichSize;
+        const lift = support / ((genreDf.get(g) || 1) / genreKnownN);
         return { g, support, score: support * Math.log(1 + lift) * (BROAD_GENRES.has(g) ? 0.45 : 1) };
       })
       .sort((x, y) => y.score - x.score || x.g.localeCompare(y.g));
 
     const primary = ranked[0]?.g;
-    const secondary = ranked.slice(1).find(r => r.support >= 0.18 && !overlaps(r.g, primary))?.g;
+    const secondary = ranked.slice(1).find(r => r.support >= 0.16 && !overlaps(r.g, primary))?.g;
 
     // A home country names the cluster only where it is concentrated.
     const [topCountry, topCountryCount] = [...countryCount.entries()].sort((x, y) => y[1] - x[1])[0] || [];
-    const share = topCountry ? topCountryCount / size : 0;
-    const globalShare = topCountry ? countryDf.get(topCountry) / n : 1;
-    const demonym = topCountry && share >= 0.55 && share >= 1.4 * globalShare ? (DEMONYMS[topCountry] || null) : null;
+    const share = topCountry ? topCountryCount / countryRichSize : 0;
+    const globalShare = topCountry ? (countryDf.get(topCountry) || 1) / countryKnownN : 1;
+    const demonym = topCountry && share >= 0.55 && share >= 1.35 * globalShare ? (DEMONYMS[topCountry] || null) : null;
 
     const topArtists = members.slice().sort((x, y) => scoreOf(y) - scoreOf(x)).slice(0, 3).map(id => byId.get(id).name);
 

@@ -2,8 +2,11 @@
 /**
  * Renders the details of a selected cluster, artist or song into the side panel.
  * Everything shown is real: why it's in your universe comes from the Spotify lists it
- * appeared in (ranks, Liked Songs, recent plays), genres from Last.fm/Wikidata/MusicBrainz.
+ * appeared in (ranks, Liked Songs, recent plays) plus your multi-year Streaming History
+ * (exact plays, hours, discovery era, peak era, dormancy, and year-by-year timeline).
  */
+import { nodeMatchesLens } from '../renderer/celestialFactory.js';
+import { formatMonthYear, formatRelativeDays } from '../etl/historyParser.js';
 
 const RANGE_LABEL = { short_term: 'last 4 weeks', medium_term: 'last 6 months', long_term: 'all time' };
 const RANGE_ORDER = ['long_term', 'medium_term', 'short_term'];
@@ -11,6 +14,7 @@ const RANGE_ORDER = ['long_term', 'medium_term', 'short_term'];
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   Object.entries(props).forEach(([k, v]) => {
+    if (v === undefined || v === null) return;
     if (k === 'class') node.className = v;
     else if (k === 'text') node.textContent = v;
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
@@ -20,7 +24,7 @@ function el(tag, props = {}, children = []) {
   return node;
 }
 
-const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const plural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString()} ${n === 1 ? one : many}`;
 
 function formatDuration(ms) {
   if (!ms) return '';
@@ -28,24 +32,110 @@ function formatDuration(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+function formatListeningTime(minutes) {
+  if (!minutes) return '';
+  if (minutes < 60) return `${minutes} min`;
+  const hrs = (minutes / 60).toFixed(1).replace(/\.0$/, '');
+  return `${hrs} hr${hrs === '1' ? '' : 's'}`;
+}
+
 function section(title, content) {
   return el('section', { class: 'detail-section' }, [el('h3', { text: title }), content]);
 }
 
-/** Short tag for a song in a list: its best chart position, else Liked/recent. */
-function songMeta(track) {
-  const ranks = track.ranks || {};
-  const best = RANGE_ORDER.map(r => ranks[r] && { r, rank: ranks[r] }).filter(Boolean).sort((a, b) => a.rank - b.rank)[0];
-  if (best) return `#${best.rank} ${RANGE_LABEL[best.r]}`;
-  if (track.liked) return 'Liked';
-  if (track.recentPlays) return 'Played recently';
-  return '';
+/** Short tag for a song or artist in a list: play count + memory badge or chart rank. */
+export function itemMetaLabel(item) {
+  const h = item.history;
+  const parts = [];
+  if (h?.plays) parts.push(`${h.plays.toLocaleString()}×`);
+  if (h?.shortBadge) {
+    parts.push(h.shortBadge);
+  } else {
+    const ranks = item.ranks || {};
+    const best = RANGE_ORDER.map(r => ranks[r] && { r, rank: ranks[r] }).filter(Boolean).sort((a, b) => a.rank - b.rank)[0];
+    if (best) parts.push(`#${best.rank} ${RANGE_LABEL[best.r]}`);
+    else if (item.liked) parts.push('Liked');
+    else if (item.recentPlays) parts.push('Recent');
+  }
+  return parts.join(' · ');
+}
+
+/** Renders the year-by-year bar chart (2020–2026) for a cluster, artist, or song. */
+function renderYearTimeline(byYear, accentColor = '#F4E9C8') {
+  if (!byYear || !Object.keys(byYear).length) return null;
+  const years = ['2020', '2021', '2022', '2023', '2024', '2025', '2026'].filter(y => y in byYear || Number(y) >= 2021);
+  const maxPlays = Math.max(1, ...years.map(y => byYear[y] || 0));
+
+  return el('div', { class: 'year-chart' }, years.map(y => {
+    const count = byYear[y] || 0;
+    const pct = count > 0 ? Math.max(8, Math.round((count / maxPlays) * 100)) : 2;
+    const isPeak = count === maxPlays && count > 0;
+    return el('div', { class: `year-col${isPeak ? ' is-peak' : ''}`, title: `${y}: ${count.toLocaleString()} plays` }, [
+      el('span', { class: 'year-count', text: count > 0 ? count.toLocaleString() : '·' }),
+      el('div', { class: 'year-bar-track' }, [
+        el('div', {
+          class: 'year-bar-fill',
+          style: `height:${pct}%;background:${isPeak ? accentColor : 'rgba(236, 234, 246, 0.32)'}`
+        })
+      ]),
+      el('span', { class: 'year-label', text: `'${y.slice(2)}` })
+    ]);
+  }));
+}
+
+/** Renders temporal memory badges & telemetry card for an artist or song. */
+function renderHistoryCard(node) {
+  const h = node.history;
+  if (!h || !h.plays) return null;
+
+  const badges = [];
+  if (h.tags?.includes('past_fav')) {
+    badges.push(el('span', { class: 'memory-badge badge-past-fav', text: `Past favorite · ${h.peakEra}` }));
+  }
+  if (h.tags?.includes('dormant')) {
+    badges.push(el('span', { class: 'memory-badge badge-dormant', text: `Haven’t heard in ${formatRelativeDays(h.daysSinceLast).replace(' ago', '')}` }));
+  }
+  if (h.tags?.includes('all_time_staple')) {
+    badges.push(el('span', { class: 'memory-badge badge-staple', text: 'All-time staple' }));
+  } else if (h.tags?.includes('current_rotation')) {
+    badges.push(el('span', { class: 'memory-badge badge-current', text: 'Current rotation' }));
+  } else if (h.tags?.includes('early_era') && !h.tags?.includes('past_fav')) {
+    badges.push(el('span', { class: 'memory-badge badge-era', text: `Heard back in ${h.peakEra}` }));
+  }
+
+  const statsGrid = el('div', { class: 'memory-stats-grid' }, [
+    el('div', { class: 'memory-stat' }, [
+      el('span', { class: 'memory-stat-label', text: 'Total plays' }),
+      el('span', { class: 'memory-stat-val', text: `${h.plays.toLocaleString()} (${formatListeningTime(h.minutes)})` })
+    ]),
+    el('div', { class: 'memory-stat' }, [
+      el('span', { class: 'memory-stat-label', text: 'First heard' }),
+      el('span', { class: 'memory-stat-val', text: `${h.firstEra} (${formatMonthYear(h.firstPlayed)})` })
+    ]),
+    el('div', { class: 'memory-stat' }, [
+      el('span', { class: 'memory-stat-label', text: 'Peak era' }),
+      el('span', { class: 'memory-stat-val', text: `${h.peakEra} (${(h.byYear?.[h.peakYear] || 0).toLocaleString()} in ${h.peakYear})` })
+    ]),
+    el('div', { class: 'memory-stat' }, [
+      el('span', { class: 'memory-stat-label', text: 'Last heard' }),
+      el('span', { class: 'memory-stat-val', text: `${formatMonthYear(h.lastPlayed)} (${formatRelativeDays(h.daysSinceLast)})` })
+    ])
+  ]);
+
+  const timeline = renderYearTimeline(h.byYear, node.color || '#F4E9C8');
+
+  return section('Listening memory & timeline', el('div', { class: 'memory-card' }, [
+    badges.length ? el('div', { class: 'memory-badges' }, badges) : null,
+    h.memoryNote ? el('p', { class: 'memory-note', text: h.memoryNote }) : null,
+    statsGrid,
+    timeline
+  ]));
 }
 
 export class DetailPanel {
   /**
    * @param {HTMLElement} container
-   * @param {{ resolve: (id) => node, onSelect: (node) => void, onFly: (node) => void, isDemo: () => boolean, likedSongsConnected: () => boolean }} ctx
+   * @param {{ resolve: (id) => node, onSelect: (node) => void, onFly: (node) => void, isDemo: () => boolean, likedSongsConnected: () => boolean, getActiveLens?: () => string }} ctx
    */
   constructor(container, ctx) {
     this.container = container;
@@ -63,13 +153,17 @@ export class DetailPanel {
     ]);
   }
 
-  songList(tracks) {
-    return el('ul', { class: 'song-list' }, tracks.map(t =>
-      el('li', {}, el('button', { type: 'button', onclick: () => this.ctx.onSelect(t) }, [
-        el('span', { text: t.name }),
-        el('span', { class: 'song-meta', text: songMeta(t) })
-      ]))
-    ));
+  songList(tracks, showArtistName = false) {
+    return el('ul', { class: 'song-list' }, tracks.map(t => {
+      const artist = showArtistName ? this.ctx.resolve(t.artistId) : null;
+      return el('li', {}, el('button', { type: 'button', onclick: () => this.ctx.onSelect(t) }, [
+        el('span', { class: 'song-main' }, [
+          el('span', { class: 'song-title', text: t.name }),
+          artist ? el('span', { class: 'song-sub', text: artist.name }) : null
+        ]),
+        el('span', { class: 'song-meta', text: itemMetaLabel(t) })
+      ]));
+    }));
   }
 
   actions(node) {
@@ -90,25 +184,124 @@ export class DetailPanel {
   }
 
   renderCluster(node) {
-    const artists = this.neighbors(node, 'artist').sort((a, b) => b.plays - a.plays);
-    const songCount = artists.reduce((s, a) => s + this.neighbors(a, 'track').length, 0);
+    const artists = this.neighbors(node, 'artist').sort((a, b) => (b.history?.plays || b.plays) - (a.history?.plays || a.plays));
+    const allClusterTracks = [];
+    const seenTrackIds = new Set();
+    artists.forEach(a => {
+      this.neighbors(a, 'track').forEach(t => {
+        if (!seenTrackIds.has(t.id)) {
+          seenTrackIds.add(t.id);
+          allClusterTracks.push(t);
+        }
+      });
+    });
+    allClusterTracks.sort((a, b) => (b.history?.plays || b.plays) - (a.history?.plays || a.plays));
+
+    const hist = node.history;
+    const summaryParts = [`${plural(artists.length, 'artist')}, ${plural(allClusterTracks.length, 'song')}`];
+    if (hist?.plays) {
+      summaryParts.push(`${hist.plays.toLocaleString()} plays (${formatListeningTime(hist.minutes)})`);
+    }
+
     const parts = [
       el('p', { class: 'detail-kind', text: 'Cluster' }),
       el('h2', { class: 'detail-title', text: node.name }),
-      el('p', { class: 'detail-by', text: `${plural(artists.length, 'artist')}, ${plural(songCount, 'song')}` })
+      el('p', { class: 'detail-by', text: summaryParts.join(' · ') })
     ];
+
     if (node.subgenres?.length) {
       parts.push(section('Sounds like', el('div', { class: 'chips' }, node.subgenres.map(g => el('span', { class: 'chip', text: g })))));
     }
-    parts.push(section('Artists', el('ul', { class: 'song-list' }, artists.map(a => {
-      const songs = this.neighbors(a, 'track').length;
-      return el('li', {}, el('button', { type: 'button', onclick: () => this.ctx.onSelect(a) }, [
-        el('span', { text: a.name }),
-        el('span', { class: 'song-meta', text: songs ? plural(songs, 'song') : '' })
-      ]));
-    }))));
+
+    if (hist?.byYear && Object.keys(hist.byYear).length) {
+      const badges = [];
+      if (hist.peakYear) badges.push(el('span', { class: 'memory-badge badge-era', text: `Peak year: ${hist.peakYear}` }));
+      if (hist.pastFavCount) badges.push(el('span', { class: 'memory-badge badge-past-fav', text: `${hist.pastFavCount} past favorites` }));
+      if (hist.dormantCount) badges.push(el('span', { class: 'memory-badge badge-dormant', text: `${hist.dormantCount} dormant` }));
+      parts.push(section('Cluster timeline', el('div', { class: 'memory-card' }, [
+        badges.length ? el('div', { class: 'memory-badges' }, badges) : null,
+        renderYearTimeline(hist.byYear, node.color)
+      ])));
+    }
+
+    // Accessible inside-cluster explorer: toggle between Artists and Songs, and filter by memory/era!
+    let mode = 'artists'; // 'artists' | 'songs'
+    let filter = this.ctx.getActiveLens?.() || 'all';
+    const listContainer = el('div', { class: 'cluster-explorer-list' });
+
+    const filters = [
+      { id: 'all', label: 'All' },
+      { id: 'past_fav', label: 'Past favs' },
+      { id: 'dormant', label: 'Dormant' },
+      { id: 'current_rotation', label: 'Current' },
+      { id: 'era_2025', label: '2025' },
+      { id: 'era_2024', label: '2024' },
+      { id: 'era_2023', label: '2023' }
+    ];
+
+    const modeArtistsBtn = el('button', { type: 'button', class: 'sub-tab is-active', text: `Artists (${artists.length})` });
+    const modeSongsBtn = el('button', { type: 'button', class: 'sub-tab', text: `Songs (${allClusterTracks.length})` });
+    const filterRow = el('div', { class: 'inline-filter-row' });
+
+    const renderExplorer = () => {
+      modeArtistsBtn.classList.toggle('is-active', mode === 'artists');
+      modeSongsBtn.classList.toggle('is-active', mode === 'songs');
+      [...filterRow.children].forEach(btn => {
+        btn.classList.toggle('is-active', btn.dataset.filter === filter);
+      });
+
+      if (mode === 'artists') {
+        const filtered = artists.filter(a => nodeMatchesLens(a, filter) || (filter !== 'all' && this.neighbors(a, 'track').some(t => nodeMatchesLens(t, filter))));
+        if (!filtered.length) {
+          listContainer.replaceChildren(el('p', { class: 'empty-note', text: 'No artists in this cluster match that memory filter.' }));
+          return;
+        }
+        listContainer.replaceChildren(el('ul', { class: 'song-list' }, filtered.map(a => {
+          const songs = this.neighbors(a, 'track').length;
+          const meta = a.history?.plays
+            ? `${a.history.plays.toLocaleString()}× · ${a.history.shortBadge || plural(songs, 'song')}`
+            : (songs ? plural(songs, 'song') : '');
+          return el('li', {}, el('button', { type: 'button', onclick: () => this.ctx.onSelect(a) }, [
+            el('span', { class: 'song-main' }, [
+              el('span', { class: 'song-title', text: a.name })
+            ]),
+            el('span', { class: 'song-meta', text: meta })
+          ]));
+        })));
+      } else {
+        const filtered = allClusterTracks.filter(t => nodeMatchesLens(t, filter));
+        if (!filtered.length) {
+          listContainer.replaceChildren(el('p', { class: 'empty-note', text: 'No songs in this cluster match that memory filter.' }));
+          return;
+        }
+        listContainer.replaceChildren(this.songList(filtered.slice(0, 150), true));
+      }
+    };
+
+    modeArtistsBtn.addEventListener('click', () => { mode = 'artists'; renderExplorer(); });
+    modeSongsBtn.addEventListener('click', () => { mode = 'songs'; renderExplorer(); });
+
+    filters.forEach(f => {
+      const btn = el('button', {
+        type: 'button',
+        class: `mini-pill${f.id === filter ? ' is-active' : ''}`,
+        'data-filter': f.id,
+        text: f.label,
+        onclick: () => { filter = f.id; renderExplorer(); }
+      });
+      filterRow.append(btn);
+    });
+
+    renderExplorer();
+
+    parts.push(el('section', { class: 'detail-section' }, [
+      el('div', { class: 'sub-tabs-row' }, [modeArtistsBtn, modeSongsBtn]),
+      hist ? filterRow : null,
+      listContainer
+    ]));
+
     if (!this.ctx.isDemo()) {
-      parts.push(el('p', { class: 'source-note', text: 'Artists are grouped by shared genres, home country and collaborations; artists with no genre data also by what you play alongside them.' }));
+      parts.push(el('p', { class: 'source-note', text: 'Artists are grouped by shared genres, home country, collaborations and listening sessions.' }));
     }
     parts.push(this.actions(node));
     this.container.append(...parts);
@@ -116,12 +309,15 @@ export class DetailPanel {
 
   renderArtist(node) {
     const clusters = this.neighbors(node, 'genre');
-    const tracks = this.neighbors(node, 'track').sort((a, b) => b.plays - a.plays);
+    const tracks = this.neighbors(node, 'track').sort((a, b) => (b.history?.plays || b.plays) - (a.history?.plays || a.plays));
     const parts = [
       el('p', { class: 'detail-kind', text: node.isBridge ? 'Artist between two clusters' : 'Artist' }),
       el('h2', { class: 'detail-title', text: node.name })
     ];
     if (clusters.length) parts.push(el('div', { class: 'chips' }, clusters.map(c => this.chipFor(c))));
+
+    const histCard = renderHistoryCard(node);
+    if (histCard) parts.push(histCard);
 
     if (!this.ctx.isDemo()) {
       const reasons = RANGE_ORDER
@@ -130,18 +326,55 @@ export class DetailPanel {
       const charted = tracks.filter(t => Object.keys(t.ranks || {}).length).length;
       const liked = tracks.filter(t => t.liked).length;
       const recent = tracks.filter(t => t.recentPlays).length;
-      if (charted) reasons.push(`${plural(charted, 'song')} in your top songs`);
+      const pastFavSongs = tracks.filter(t => t.history?.tags?.includes('past_fav')).length;
+      const dormantSongs = tracks.filter(t => t.history?.tags?.includes('dormant')).length;
+      if (charted) reasons.push(`${plural(charted, 'song')} in your top charts`);
       if (liked) reasons.push(`${plural(liked, 'Liked Song')}`);
       if (recent) reasons.push(`${plural(recent, 'song')} played recently`);
+      if (pastFavSongs) reasons.push(`${plural(pastFavSongs, 'past-favorite song')} from earlier eras`);
+      if (dormantSongs) reasons.push(`${plural(dormantSongs, 'song')} you haven’t played in 4+ months`);
+      if (!reasons.length && node.history?.plays) {
+        reasons.push(`${plural(node.history.plays, 'play')} in your streaming history (${node.history.firstEra} – ${node.history.lastEra})`);
+      }
       if (!reasons.length) reasons.push('Featured on a song you listen to');
       parts.push(section('Why they’re here', el('ul', { class: 'reason-list' }, reasons.map(r => el('li', { text: r })))));
     }
 
     if (tracks.length) {
-      parts.push(section(`Your songs (${tracks.length})`, this.songList(tracks)));
+      let songFilter = 'all';
+      const songContainer = el('div');
+      const renderArtistSongs = () => {
+        const list = songFilter === 'all' ? tracks : tracks.filter(t => nodeMatchesLens(t, songFilter));
+        songContainer.replaceChildren(
+          list.length
+            ? this.songList(list)
+            : el('p', { class: 'empty-note', text: 'No songs by this artist match that filter.' })
+        );
+      };
+      renderArtistSongs();
+
+      const filterBar = tracks.length >= 4 && node.history ? el('div', { class: 'inline-filter-row' }, [
+        { id: 'all', label: `All (${tracks.length})` },
+        { id: 'past_fav', label: 'Past favs' },
+        { id: 'dormant', label: 'Dormant' },
+        { id: 'era_2025', label: '2025' },
+        { id: 'era_2024', label: '2024' }
+      ].map(f => el('button', {
+        type: 'button',
+        class: `mini-pill${f.id === 'all' ? ' is-active' : ''}`,
+        text: f.label,
+        onclick: (e) => {
+          songFilter = f.id;
+          [...e.currentTarget.parentElement.children].forEach(b => b.classList.remove('is-active'));
+          e.currentTarget.classList.add('is-active');
+          renderArtistSongs();
+        }
+      }))) : null;
+
+      parts.push(section(`Your songs (${tracks.length})`, el('div', {}, [filterBar, songContainer])));
     } else if (!this.ctx.isDemo()) {
       const note = this.ctx.likedSongsConnected()
-        ? 'None of their songs are in your top songs, recent plays or Liked Songs, so there are no moons here. Spotify ranks them as a top artist from your overall listening history.'
+        ? 'None of their individual songs had enough plays to form moons, though they appear in your artist listening.'
         : 'None of their songs are in your top songs or recent plays. Liked Songs aren’t connected yet; reconnect Spotify to include them.';
       parts.push(section('Your songs', el('p', { class: 'empty-note', text: note })));
     }
@@ -162,9 +395,10 @@ export class DetailPanel {
   renderSong(node) {
     const artist = this.ctx.resolve(node.artistId);
     const feat = node.featArtistId ? this.ctx.resolve(node.featArtistId) : null;
+    const clusters = artist ? this.neighbors(artist, 'genre') : [];
     const by = el('p', { class: 'detail-by' }, [
       'by ',
-      artist ? el('button', { type: 'button', text: artist.name, onclick: () => this.ctx.onSelect(artist) }) : 'unknown artist',
+      artist ? el('button', { type: 'button', text: artist.name, onclick: () => this.ctx.onSelect(artist) }) : (node.artistName || 'unknown artist'),
       feat ? ' with ' : null,
       feat ? el('button', { type: 'button', text: feat.name, onclick: () => this.ctx.onSelect(feat) }) : null
     ]);
@@ -173,6 +407,12 @@ export class DetailPanel {
       el('h2', { class: 'detail-title', text: node.name }),
       by
     ];
+    if (clusters.length) {
+      parts.push(el('div', { class: 'chips', style: 'margin-top:10px' }, clusters.map(c => this.chipFor(c))));
+    }
+
+    const histCard = renderHistoryCard(node);
+    if (histCard) parts.push(histCard);
 
     if (!this.ctx.isDemo()) {
       const reasons = RANGE_ORDER
@@ -180,6 +420,9 @@ export class DetailPanel {
         .map(r => `Top song, ${RANGE_LABEL[r]} (#${node.ranks[r]})`);
       if (node.liked) reasons.push('In your Liked Songs');
       if (node.recentPlays) reasons.push(node.recentPlays > 1 ? `Played ${node.recentPlays} times recently` : 'Played recently');
+      if (node.history?.plays) {
+        reasons.push(`Played ${plural(node.history.plays, 'time')} (${formatListeningTime(node.history.minutes)}) in your streaming history`);
+      }
       if (reasons.length) parts.push(section('Why it’s here', el('ul', { class: 'reason-list' }, reasons.map(r => el('li', { text: r })))));
     }
 

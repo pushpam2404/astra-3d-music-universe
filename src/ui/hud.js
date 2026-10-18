@@ -1,28 +1,50 @@
 // src/ui/hud.js
 /**
- * Everything around the galaxy: top bar (search, view settings, Spotify), the side
- * panel (cluster list ⇄ details; one slot, never both), the caption and loading state.
+ * Everything around the galaxy: top bar (search, History import/export, view settings,
+ * Spotify), the Time & Memory Lens bar, the side panel (Clusters | Memories | Songs ⇄
+ * Details), the caption and loading state.
  */
 import { SPOTIFY_LOGIN_URL, logout } from '../api/backendClient.js';
+import { nodeMatchesLens } from '../renderer/celestialFactory.js';
+import { itemMetaLabel } from './detailPanel.js';
 
 const KIND_LABEL = { genre: 'Cluster', artist: 'Artist', track: 'Song' };
 const KIND_ORDER = { genre: 0, artist: 1, track: 2 };
-const MAX_RESULTS = 12;
+const MAX_RESULTS = 14;
+
+const LENS_DESCRIPTIONS = {
+  all: null,
+  past_fav: 'Showing Past Favorites — songs & artists you played heavily in past eras but rarely recently.',
+  dormant: 'Showing Dormant Gems — loved songs & artists you haven’t played in 4+ months.',
+  current_rotation: 'Showing Current Rotation — actively played in the last 60 days or top charts.',
+  all_time_staple: 'Showing All-Time Staples — played consistently across 3+ years.',
+  era_2026: 'Showing 2026 Era — music shaping your 2026 listening.',
+  early_2025: 'Showing Early 2025 Era — songs and artists that peaked in Jan–Apr 2025.',
+  era_2025: 'Showing 2025 Era — songs and artists heavily played in 2025.',
+  early_2024: 'Showing Early 2024 Era — songs and artists that peaked in Jan–Apr 2024.',
+  era_2024: 'Showing 2024 Era — songs and artists heavily played in 2024.',
+  era_2023: 'Showing 2023 Era — songs and artists heavily played in 2023.',
+  era_2020_2022: 'Showing 2020–2022 Era — your earliest recorded Spotify years.'
+};
 
 const $ = (id) => document.getElementById(id);
 
 export class Hud {
   /**
-   * @param {object} state  AppState (layers, nodes)
-   * @param {object} cb     { onSelectNode, onBack, onResetCamera, onLayersChange, onGlow, onOrbitSpeed, onNodeScale, onDisconnected }
+   * @param {object} state  AppState (layers, nodes, activeLens)
+   * @param {object} cb     callbacks
    */
   constructor(state, cb) {
     this.state = state;
     this.cb = cb;
     this.authStatus = null;
+    this.activeTab = 'clusters'; // 'clusters' | 'memories' | 'songs'
+    this.suns = [];
     this.initSearch();
     this.initViewPanel();
+    this.initLensBar();
     this.initSidePanel();
+    this.initHistoryDialog();
     this.initSpotifyButton();
     $('reset-camera-btn').addEventListener('click', () => this.cb.onResetCamera());
   }
@@ -53,30 +75,50 @@ export class Hud {
       const q = input.value.trim().toLowerCase();
       if (!q) return close();
       results = this.state.nodes
-        .filter(n => n.name?.toLowerCase().includes(q))
+        .filter(n => {
+          if (n.name?.toLowerCase().includes(q)) return true;
+          if (n.connectedArtists?.[0]?.toLowerCase().includes(q)) return true;
+          if (n.history?.peakEra?.toLowerCase().includes(q)) return true;
+          if (n.history?.statusLabel?.toLowerCase().includes(q)) return true;
+          if (q === 'dormant' && n.history?.tags?.includes('dormant')) return true;
+          if ((q === 'past' || q === 'past fav' || q === 'favorite') && n.history?.tags?.includes('past_fav')) return true;
+          return false;
+        })
         .sort((a, b) =>
           (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1)
           || KIND_ORDER[a.type] - KIND_ORDER[b.type]
-          || (b.plays || 0) - (a.plays || 0))
+          || (b.history?.plays || b.plays || 0) - (a.history?.plays || a.plays || 0))
         .slice(0, MAX_RESULTS);
+
       list.replaceChildren(...(results.length ? results.map(n => {
         const li = document.createElement('li');
         li.setAttribute('role', 'option');
         const dot = document.createElement('span');
         dot.className = 'chip-dot';
         dot.style.background = n.color;
+        const textWrap = document.createElement('span');
+        textWrap.className = 'result-main';
         const name = document.createElement('span');
+        name.className = 'result-name';
         name.textContent = n.name;
+        textWrap.append(name);
+        if (n.type === 'track' && n.connectedArtists?.[0]) {
+          const sub = document.createElement('span');
+          sub.className = 'result-sub';
+          sub.textContent = n.connectedArtists[0];
+          textWrap.append(sub);
+        }
         const kind = document.createElement('span');
         kind.className = 'result-kind';
-        kind.textContent = KIND_LABEL[n.type];
-        li.append(dot, name, kind);
+        const meta = n.type !== 'genre' ? itemMetaLabel(n) : `${n.neighbors?.size || 0} artists`;
+        kind.textContent = meta || KIND_LABEL[n.type];
+        li.append(dot, textWrap, kind);
         li.addEventListener('mousedown', (e) => {
           e.preventDefault();
           choose(n);
         });
         return li;
-      }) : [Object.assign(document.createElement('li'), { textContent: 'Nothing by that name in your universe' })]));
+      }) : [Object.assign(document.createElement('li'), { textContent: 'Nothing by that name or era in your universe' })]));
       list.hidden = false;
       active = results.length ? 0 : -1;
       highlight();
@@ -96,6 +138,49 @@ export class Hud {
       }
     });
     input.addEventListener('blur', close);
+  }
+
+  /* ---------- Time & Memory Lens bar ---------- */
+
+  initLensBar() {
+    const bar = $('lens-bar');
+    bar.addEventListener('click', (e) => {
+      const btn = e.target.closest?.('.lens-pill');
+      if (!btn) return;
+      this.setLens(btn.dataset.lens || 'all');
+    });
+  }
+
+  setLens(lens) {
+    this.state.activeLens = lens || 'all';
+    document.querySelectorAll('#lens-bar .lens-pill').forEach(btn => {
+      btn.classList.toggle('is-active', btn.dataset.lens === this.state.activeLens);
+    });
+
+    const banner = $('active-lens-banner');
+    const desc = LENS_DESCRIPTIONS[this.state.activeLens];
+    if (desc) {
+      banner.replaceChildren();
+      const span = document.createElement('span');
+      span.textContent = desc;
+      const clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.textContent = 'Reset';
+      clearBtn.addEventListener('click', () => this.setLens('all'));
+      banner.append(span, clearBtn);
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+
+    this.renderClusters(this.suns);
+    this.renderMemoriesView();
+    this.renderSongsBrowser();
+    this.cb.onLensChange?.(this.state.activeLens);
+  }
+
+  setLensBarVisible(visible) {
+    $('lens-bar').hidden = !visible;
   }
 
   /* ---------- View settings ---------- */
@@ -122,7 +207,6 @@ export class Hud {
       });
     });
 
-    // Glow and Motion are per-viewer preferences, remembered in this browser.
     const bindSlider = (id, label, format, onChange) => {
       const input = $(id);
       try {
@@ -142,6 +226,7 @@ export class Hud {
 
     bindSlider('glow-slider', 'glow-val', v => `${Math.round(v * 100)}%`, v => this.cb.onGlow(v));
     bindSlider('orbit-speed-slider', 'orbit-speed-val', v => (v === 0 ? 'paused' : `${v}×`), v => this.cb.onOrbitSpeed(v));
+    bindSlider('cluster-spread-slider', 'cluster-spread-val', v => `${v.toFixed(2).replace(/\.?0+$/, '')}×`, v => this.cb.onClusterSpread?.(v));
     $('node-scale-slider').addEventListener('input', (e) => {
       const v = Number(e.target.value);
       $('node-scale-val').textContent = `${v}×`;
@@ -149,22 +234,23 @@ export class Hud {
     });
   }
 
-  /** Re-applies remembered slider settings (call after a universe is built). */
   restoreSettings() {
     this.applyInitialSettings.forEach(apply => apply());
   }
 
-  /* ---------- Side panel ---------- */
+  /* ---------- Side panel (Clusters | Memories | Songs) ---------- */
 
   initSidePanel() {
     $('detail-back-btn').addEventListener('click', () => this.cb.onBack());
 
-    // Phones: the panel is a bottom sheet that rests lowered (just its heading showing)
-    // so the galaxy gets the screen. Tap the handle or heading to toggle, or drag it.
+    document.querySelectorAll('.panel-tab').forEach(btn => {
+      btn.addEventListener('click', () => this.setSideTab(btn.dataset.tab));
+    });
+
     const panel = $('side-panel');
     const handle = $('sheet-handle');
     let drag = null;
-    const grabbable = (e) => !this.sheetOpen || e.target === handle || handle.contains(e.target) || e.target.closest?.('.panel-heading');
+    const grabbable = (e) => !this.sheetOpen || e.target === handle || handle.contains(e.target) || e.target.closest?.('.panel-header-row');
     panel.addEventListener('pointerdown', (e) => {
       if (!this.isPhone() || !grabbable(e)) return;
       drag = { y: e.clientY, moved: 0 };
@@ -192,16 +278,31 @@ export class Hud {
     this.setSheet(false);
   }
 
+  setSideTab(tab) {
+    this.activeTab = tab || 'clusters';
+    const titles = { clusters: 'Clusters', memories: 'Memories', songs: 'Songs' };
+    $('side-panel-heading').textContent = titles[this.activeTab] || 'Clusters';
+    document.querySelectorAll('.panel-tab').forEach(btn => {
+      const active = btn.dataset.tab === this.activeTab;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', String(active));
+    });
+    $('cluster-list').hidden = this.activeTab !== 'clusters';
+    $('memories-list').hidden = this.activeTab !== 'memories';
+    $('songs-browser').hidden = this.activeTab !== 'songs';
+
+    if (this.activeTab === 'memories') this.renderMemoriesView();
+    if (this.activeTab === 'songs') this.renderSongsBrowser();
+  }
+
   isPhone() {
     return window.innerWidth <= 760;
   }
 
-  /** Height of the lowered sheet: handle + heading. */
   peekHeight() {
     return 84;
   }
 
-  /** Raise (true) or lower (false) the phone bottom sheet; no-op layout on desktop. */
   setSheet(open) {
     this.sheetOpen = open;
     document.body.classList.toggle('sheet-open', open);
@@ -210,7 +311,6 @@ export class Hud {
     this.cb.onSheetChange?.();
   }
 
-  /** Pixels of screen the sheet covers at the bottom (phones only). */
   sheetCover() {
     if (!this.isPhone()) return 0;
     return this.sheetOpen ? $('side-panel').offsetHeight + 10 : this.peekHeight() + 10;
@@ -232,8 +332,12 @@ export class Hud {
 
   /** Clusters, largest first; clicking one flies to it and opens its details. */
   renderClusters(suns) {
+    this.suns = suns || [];
     const list = $('cluster-list');
-    list.replaceChildren(...suns
+    const lens = this.state.activeLens || 'all';
+    const hasLens = lens !== 'all';
+
+    list.replaceChildren(...this.suns
       .slice()
       .sort((a, b) => (b.neighbors?.size || 0) - (a.neighbors?.size || 0))
       .map(sun => {
@@ -250,19 +354,347 @@ export class Hud {
         name.textContent = sun.name;
         const sub = document.createElement('span');
         sub.className = 'cluster-sub';
-        // Top artists say more about a cluster than repeating its genre names.
-        sub.textContent = (sun.topArtists || sun.subgenres || []).slice(0, 3).join(', ');
+        const topNames = (sun.topArtists || sun.subgenres || []).slice(0, 3).join(', ');
+        const songCnt = sun.trackCount ? ` · ${sun.trackCount} songs` : '';
+        sub.textContent = `${topNames}${songCnt}`;
         text.append(name, sub);
+
         const count = document.createElement('span');
         count.className = 'cluster-count';
-        count.textContent = sun.neighbors?.size || 0;
-        count.title = 'Artists';
+        if (hasLens) {
+          const matchingArtists = [...(sun.neighbors || [])]
+            .map(id => this.state.nodeMap.get(id))
+            .filter(n => n && nodeMatchesLens(n, lens)).length;
+          count.textContent = `${matchingArtists}/${sun.neighbors?.size || 0}`;
+          count.title = 'Matching artists in this lens';
+        } else {
+          count.textContent = sun.neighbors?.size || 0;
+          count.title = 'Artists';
+        }
         li.append(swatch, text, count);
         const select = () => this.cb.onSelectNode(sun);
         li.addEventListener('click', select);
         li.addEventListener('keydown', (e) => { if (e.key === 'Enter') select(); });
         return li;
       }));
+
+    this.renderMemoriesView();
+    this.renderSongsBrowser();
+  }
+
+  /**
+   * Renders the "Memories" tab: curated sections for Past Favorites, Dormant Gems
+   * ("Haven't heard in a while"), Early 2024 / 2025 Time Capsules, and All-Time Staples.
+   */
+  renderMemoriesView() {
+    const container = $('memories-list');
+    if (!container) return;
+
+    const tracks = this.state.nodes.filter(n => n.type === 'track' && n.history?.plays);
+    const artists = this.state.nodes.filter(n => n.type === 'artist' && n.history?.plays);
+
+    if (!tracks.length && !artists.length) {
+      container.replaceChildren();
+      const empty = document.createElement('p');
+      empty.className = 'empty-note';
+      empty.textContent = 'Import your Spotify Streaming History (via the History button above) to unlock past favorites, dormant gems and 2020–2026 time capsules.';
+      container.append(empty);
+      return;
+    }
+
+    const pastFavs = tracks
+      .filter(t => t.history?.tags?.includes('past_fav'))
+      .sort((a, b) => b.history.plays - a.history.plays)
+      .slice(0, 12);
+
+    const dormantGems = tracks
+      .filter(t => t.history?.tags?.includes('dormant') && t.history.plays >= 10)
+      .sort((a, b) => (b.history.plays * Math.sqrt(b.history.daysSinceLast)) - (a.history.plays * Math.sqrt(a.history.daysSinceLast)))
+      .slice(0, 12);
+
+    const early2024 = tracks
+      .filter(t => t.history?.tags?.includes('early_2024') || t.history?.peakYear === '2024')
+      .sort((a, b) => (b.history.byYear?.['2024'] || 0) - (a.history.byYear?.['2024'] || 0))
+      .slice(0, 10);
+
+    const early2025 = tracks
+      .filter(t => t.history?.tags?.includes('early_2025') || t.history?.peakYear === '2025')
+      .sort((a, b) => (b.history.byYear?.['2025'] || 0) - (a.history.byYear?.['2025'] || 0))
+      .slice(0, 10);
+
+    const buildGroup = (title, subtitle, lensId, items) => {
+      if (!items.length) return null;
+      const sec = document.createElement('section');
+      sec.className = 'memory-group';
+      const head = document.createElement('div');
+      head.className = 'memory-group-head';
+      const h3 = document.createElement('h3');
+      h3.textContent = title;
+      const lensBtn = document.createElement('button');
+      lensBtn.type = 'button';
+      lensBtn.className = 'memory-lens-link';
+      lensBtn.textContent = this.state.activeLens === lensId ? 'Showing in 3D' : 'Light up in 3D';
+      lensBtn.addEventListener('click', () => this.setLens(this.state.activeLens === lensId ? 'all' : lensId));
+      head.append(h3, lensBtn);
+
+      const sub = document.createElement('p');
+      sub.className = 'memory-group-sub';
+      sub.textContent = subtitle;
+
+      const ul = document.createElement('ul');
+      ul.className = 'song-list';
+      items.forEach(item => {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.addEventListener('click', () => this.cb.onSelectNode(item));
+
+        const main = document.createElement('span');
+        main.className = 'song-main';
+        const tSpan = document.createElement('span');
+        tSpan.className = 'song-title';
+        tSpan.textContent = item.name;
+        const aSpan = document.createElement('span');
+        aSpan.className = 'song-sub';
+        aSpan.textContent = item.connectedArtists?.[0] || item.artistName || '';
+        main.append(tSpan, aSpan);
+
+        const meta = document.createElement('span');
+        meta.className = 'song-meta';
+        meta.textContent = itemMetaLabel(item);
+
+        btn.append(main, meta);
+        li.append(btn);
+        ul.append(li);
+      });
+
+      sec.append(head, sub, ul);
+      return sec;
+    };
+
+    const groups = [
+      buildGroup(
+        'Past Favorites',
+        'Songs you played on repeat in earlier eras that faded from recent rotation.',
+        'past_fav',
+        pastFavs
+      ),
+      buildGroup(
+        'Haven’t Heard in a While',
+        'High-play songs untouched for 4+ months.',
+        'dormant',
+        dormantGems
+      ),
+      buildGroup(
+        '2025 Era Favorites',
+        'Songs that defined your Early & Mid 2025 listening.',
+        'era_2025',
+        early2025
+      ),
+      buildGroup(
+        '2024 Time Capsule',
+        'Songs you had on heavy rotation back in 2024.',
+        'era_2024',
+        early2024
+      )
+    ].filter(Boolean);
+
+    container.replaceChildren(...groups);
+  }
+
+  /**
+   * Renders the "Songs" tab: lets the user browse and sort all songs in the universe
+   * (automatically filtered by the active Time & Memory Lens).
+   */
+  renderSongsBrowser() {
+    const container = $('songs-browser');
+    if (!container) return;
+
+    const lens = this.state.activeLens || 'all';
+    const allTracks = this.state.nodes
+      .filter(n => n.type === 'track' && nodeMatchesLens(n, lens))
+      .sort((a, b) => (b.history?.plays || b.plays || 0) - (a.history?.plays || a.plays || 0));
+
+    if (!allTracks.length) {
+      const p = document.createElement('p');
+      p.className = 'empty-note';
+      p.textContent = 'No songs match the selected memory lens.';
+      container.replaceChildren(p);
+      return;
+    }
+
+    const countNote = document.createElement('p');
+    countNote.className = 'memory-group-sub';
+    countNote.textContent = `Showing top ${Math.min(150, allTracks.length)} of ${allTracks.length.toLocaleString()} songs${lens !== 'all' ? ' in this lens' : ''}. Click any song to fly to its moon.`;
+
+    const ul = document.createElement('ul');
+    ul.className = 'song-list';
+    allTracks.slice(0, 150).forEach(t => {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.addEventListener('click', () => this.cb.onSelectNode(t));
+
+      const main = document.createElement('span');
+      main.className = 'song-main';
+      const title = document.createElement('span');
+      title.className = 'song-title';
+      title.textContent = t.name;
+      const sub = document.createElement('span');
+      sub.className = 'song-sub';
+      sub.textContent = t.connectedArtists?.[0] || t.artistName || '';
+      main.append(title, sub);
+
+      const meta = document.createElement('span');
+      meta.className = 'song-meta';
+      meta.textContent = itemMetaLabel(t);
+
+      btn.append(main, meta);
+      li.append(btn);
+      ul.append(li);
+    });
+
+    container.replaceChildren(countNote, ul);
+  }
+
+  /* ---------- History Import & Export Dialog ---------- */
+
+  initHistoryDialog() {
+    const dialog = $('history-dialog');
+    const openBtn = $('history-btn');
+    const closeBtn = $('history-close-btn');
+    const folderBtn = $('import-folder-btn');
+    const filesBtn = $('import-files-btn');
+    const localBtn = $('use-local-history-btn');
+    const folderInput = $('history-folder-input');
+    const filesInput = $('history-files-input');
+    const dropzone = $('history-dropzone');
+    const exportJsonBtn = $('export-json-btn');
+    const exportCsvBtn = $('export-csv-btn');
+
+    openBtn.addEventListener('click', () => {
+      this.updateHistoryDialogStatus();
+      dialog.showModal();
+    });
+    closeBtn.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', (e) => {
+      if (e.target === dialog) dialog.close();
+    });
+
+    folderBtn.addEventListener('click', () => folderInput.click());
+    filesBtn.addEventListener('click', () => filesInput.click());
+    localBtn.addEventListener('click', () => {
+      this.cb.onUseLocalHistory?.();
+      dialog.close();
+    });
+
+    const handleFiles = async (fileList) => {
+      if (!fileList || !fileList.length) return;
+      this.setHistoryFeedback('Reading and analyzing your listening history files…', false);
+      try {
+        await this.cb.onImportFiles?.(fileList);
+        this.setHistoryFeedback('Listening history imported and mapped!', false);
+        setTimeout(() => {
+          if (dialog.open) dialog.close();
+        }, 550);
+      } catch (err) {
+        this.setHistoryFeedback(err.message || 'Failed to import files.', true);
+      }
+    };
+
+    folderInput.addEventListener('change', (e) => {
+      handleFiles(e.target.files);
+      folderInput.value = '';
+    });
+    filesInput.addEventListener('change', (e) => {
+      handleFiles(e.target.files);
+      filesInput.value = '';
+    });
+
+    ['dragenter', 'dragover'].forEach(ev => {
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        dropzone.classList.add('is-dragover');
+      });
+    });
+    ['dragleave', 'drop'].forEach(ev => {
+      dropzone.addEventListener(ev, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('is-dragover');
+      });
+    });
+    dropzone.addEventListener('drop', (e) => {
+      if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files);
+    });
+
+    exportJsonBtn.addEventListener('click', () => this.cb.onExportJson?.());
+    exportCsvBtn.addEventListener('click', () => this.cb.onExportCsv?.());
+  }
+
+  setHistoryFeedback(message, isError = false) {
+    const el = $('history-feedback');
+    if (!message) {
+      el.hidden = true;
+      return;
+    }
+    el.textContent = message;
+    el.className = `history-feedback${isError ? ' is-error' : ''}`;
+    el.hidden = false;
+  }
+
+  updateHistoryDialogStatus() {
+    const box = $('history-status-box');
+    const localBtn = $('use-local-history-btn');
+    const hm = this.state.rawDataset?.historyMeta;
+    const local = this.authStatus?.localHistory;
+
+    if (local?.available) {
+      localBtn.hidden = false;
+      localBtn.textContent = `Load "${local.sourceFolder}" (${local.validPlays.toLocaleString()} plays)`;
+    } else {
+      localBtn.hidden = true;
+    }
+
+    if (hm?.validPlays) {
+      const years = Object.keys(hm.years || {}).sort();
+      const yearSpan = years.length ? `${years[0]}–${years[years.length - 1]}` : `${hm.firstDate} to ${hm.lastDate}`;
+      box.innerHTML = `
+        <div class="status-pill-row">
+          <span class="status-dot is-active"></span>
+          <strong>Active History: ${hm.validPlays.toLocaleString()} plays (${hm.totalHours?.toLocaleString() || '—'} hrs)</strong>
+        </div>
+        <p class="status-detail">Spanning ${yearSpan} (${hm.firstDate} to ${hm.lastDate}) · Source: ${hm.sourceFolder || 'Imported'}${hm.connectedSpotify ? ' · Merged with live Spotify' : ''}</p>
+      `;
+    } else if (local?.available) {
+      box.innerHTML = `
+        <div class="status-pill-row">
+          <span class="status-dot"></span>
+          <strong>Detected in project folder: ${local.sourceFolder}</strong>
+        </div>
+        <p class="status-detail">${local.validPlays.toLocaleString()} plays (${local.totalHours} hrs) across ${local.fileCount} files (${local.firstDate} to ${local.lastDate}).</p>
+      `;
+    } else {
+      box.innerHTML = `
+        <div class="status-pill-row">
+          <span class="status-dot"></span>
+          <strong>No streaming history imported yet</strong>
+        </div>
+        <p class="status-detail">Select your Spotify Extended Streaming History folder or JSON files below to merge multi-year play history into your galaxy.</p>
+      `;
+    }
+  }
+
+  updateHistoryButtonBadge() {
+    const btn = $('history-btn');
+    const hm = this.state.rawDataset?.historyMeta;
+    if (hm?.validPlays) {
+      const k = hm.validPlays >= 1000 ? `${(hm.validPlays / 1000).toFixed(1)}k` : hm.validPlays;
+      btn.textContent = `History · ${k}`;
+      btn.classList.add('has-history');
+    } else {
+      btn.textContent = 'History';
+      btn.classList.remove('has-history');
+    }
   }
 
   /* ---------- Caption, notice, loading ---------- */
@@ -272,7 +704,6 @@ export class Hud {
     $('universe-stats').textContent = stats || '';
   }
 
-  /** One short line under the caption; `action` = { label, run } adds a link-style button. */
   setNotice(text, action) {
     const notice = $('universe-notice');
     if (!text) {
@@ -290,7 +721,9 @@ export class Hud {
     notice.hidden = false;
   }
 
-  setLoading(loading) {
+  setLoading(loading, title = 'Charting your universe', body = 'Merging your Spotify listening history, top charts and Liked Songs, then grouping every artist by sound.') {
+    if (title) $('loading-title-text').textContent = title;
+    if (body) $('loading-body-text').textContent = body;
     $('loading-overlay').hidden = !loading;
   }
 

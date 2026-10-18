@@ -25,15 +25,24 @@ export async function getAuthStatus() {
   }
 }
 
+export async function getHistoryStatus() {
+  try {
+    return await requestJson('/api/history/status');
+  } catch {
+    return { available: false };
+  }
+}
+
 /**
  * Resolves to { dataset, artistMeta, diagnostics }; dataset is null when Spotify has no
  * data yet. knownMeta is what earlier loads learned (see artistMetaCache.js).
+ * historySummary is optional browser-imported streaming history.
  */
-export function fetchUniverse(knownMeta = {}) {
+export function fetchUniverse(knownMeta = {}, { historySummary = null, useLocalHistory = true } = {}) {
   return requestJson('/api/universe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ knownMeta })
+    body: JSON.stringify({ knownMeta, historySummary, useLocalHistory })
   });
 }
 
@@ -42,7 +51,7 @@ export function enrichArtists(artists) {
   return requestJson('/api/enrich', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ artists })
+    body: JSON.stringify({ artists, allowHistoryEnrich: true })
   });
 }
 

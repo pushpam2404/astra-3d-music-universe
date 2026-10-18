@@ -6,8 +6,9 @@
  *    and country, so a shared "qawwali" or "India" counts more than a shared "pop")
  *    blended with genre-family overlap, plus a bonus for collaborating on a top track.
  * 2. Louvain community detection on that graph finds the clusters.
- * 3. Splinter clusters (under ~1% of artists) merge into their best-linked neighbour;
- *    isolated artists join the cluster they resemble most, or "Uncharted" if nothing.
+ * 3. Splinter clusters (under ~2.5% of placed artists or < 6 artists) merge into their
+ *    best-linked neighbour (or dissolve into orphans if isolated); isolated artists join
+ *    the cluster they resemble most, or via listening sessions, or "Uncharted" if nothing.
  * 4. clusterNaming.js names each cluster by its most distinctive genres and home, and
  *    artists with strong ties to a second cluster are marked as bridges.
  */
@@ -18,22 +19,15 @@ import { familyVector, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.j
 import { describeClusters } from './clusterNaming.js';
 
 const LOUVAIN_RESOLUTION = 1.3;
-// Countries are a scene signal, slightly weaker than an actual genre tag.
 const COUNTRY_TAG_WEIGHT = 0.85;
 const EDGE_THRESHOLD = 0.12;
-// Played-together bonus for genre-less artists: up to TOGETHER_MAX, reached at
-// TOGETHER_FULL (two adjacent plays/likes).
-const TOGETHER_MAX = 0.7;
-const TOGETHER_FULL = 2;
-// Played-together weight with one cluster that moves a genre-less artist into it.
-const TOGETHER_REASSIGN = 1;
-// Sparse similarity: tags shared by more artists than this don't generate candidate pairs,
-// each artist is compared with at most MAX_CANDIDATES others and keeps MAX_NEIGHBORS.
+const TOGETHER_MAX = 0.65;
+const TOGETHER_FULL = 2.5;
+const TOGETHER_REASSIGN = 0.4;
 const MAX_CANDIDATE_DF = 400;
 const MAX_CANDIDATES = 600;
 const COMMON_TAG_SLICE = 150;
 const MAX_NEIGHBORS = 30;
-// Up to this size every pair is compared exactly (as fast as the sparse path there).
 const EXACT_LIMIT = 2500;
 const BRIDGE_MIN_AFFINITY = 0.18;
 const BRIDGE_RATIO = 0.65;
@@ -49,20 +43,11 @@ function mulberry32(seed) {
 }
 
 const EMBED_NEIGHBORS = 15;
-// How strongly cluster membership pulls the embedding together (0 = pure similarity).
-const EMBED_CLUSTER_WEIGHT = 0.35;
+const EMBED_CLUSTER_WEIGHT = 0.45;
 
-/**
- * UMAP on the artist similarity matrix → 3D coordinates where nearby means similar.
- * Neighbours are taken straight from the similarity scores (distance = 1 − similarity),
- * and cluster labels are blended in so each cluster stays a coherent region.
- * Output is centered, with the 90th-percentile radius scaled to 1. Deterministic.
- */
-// Gap between clusters, in multiples of a cluster's own size, beyond which the map
-// reads as scattered islands. Clean clusters come out of UMAP tight and far apart;
-// pulling the cluster centres in (members keep their offsets) keeps one sphere.
-const MAX_CLUSTER_GAP_RATIO = 5;
-const MAX_ISOLATION = 1.5;
+const MAX_CLUSTER_GAP_RATIO = 2.0;
+const MAX_ISOLATION = 1.25;
+const MAX_MEMBER_OUTLIER = 2.1;
 
 function pairHash(i, j) {
   const a = Math.min(i, j), b = Math.max(i, j);
@@ -76,26 +61,51 @@ function compactClusters(points, labels) {
     groups.get(labels[i]).push(i);
   });
   if (groups.size < 2) return points;
+
   const centre = new Map();
-  let spread = 0;
+  let totalSpread = 0;
+
   groups.forEach((members, c) => {
     const m = [0, 1, 2].map(d => members.reduce((s, i) => s + points[i][d], 0) / members.length);
     centre.set(c, m);
-    spread += members.reduce((s, i) => s + Math.hypot(...points[i].map((v, d) => v - m[d])), 0);
+    const dists = members.map(i => Math.hypot(...points[i].map((v, d) => v - m[d]))).sort((a, b) => a - b);
+    const med = dists[Math.floor(dists.length * 0.6)] || 0.25;
+    const maxMemberDist = med * MAX_MEMBER_OUTLIER;
+    members.forEach(i => {
+      const off = points[i].map((v, d) => v - m[d]);
+      const r = Math.hypot(...off);
+      if (r > maxMemberDist && r > 1e-6) {
+        const clampedR = maxMemberDist + Math.log1p(r - maxMemberDist) * 0.25;
+        points[i] = m.map((mv, d) => mv + off[d] * (clampedR / r));
+      }
+      totalSpread += Math.min(r, maxMemberDist);
+    });
   });
-  spread /= points.length;
+
+  const spread = (totalSpread / points.length) || 0.3;
   const cs = [...centre.values()];
   let gap = 0, pairs = 0;
   for (let a = 0; a < cs.length; a++) {
-    for (let b = a + 1; b < cs.length; b++) { gap += Math.hypot(...cs[a].map((v, d) => v - cs[b][d])); pairs++; }
+    for (let b = a + 1; b < cs.length; b++) {
+      gap += Math.hypot(...cs[a].map((v, d) => v - cs[b][d]));
+      pairs++;
+    }
   }
-  gap /= pairs;
+  gap /= (pairs || 1);
   const ratio = gap / (spread || 1e-6);
   const k = Math.min(1, MAX_CLUSTER_GAP_RATIO / ratio);
   const target = new Map([...centre].map(([c, m]) => [c, m.map(v => v * k)]));
-  // A cluster sharing little with the rest (e.g. artists known only by country) would
-  // still float far out on its own: keep it within MAX_ISOLATION × the usual distance
-  // from its nearest neighbouring cluster.
+
+  const centerRadii = [...target.values()].map(m => Math.hypot(...m)).sort((a, b) => a - b);
+  const medianCenterR = centerRadii[Math.floor(centerRadii.length * 0.5)] || spread;
+  const maxOriginR = Math.max(spread * 1.5, medianCenterR * 1.35);
+  target.forEach((m, c) => {
+    const r = Math.hypot(...m);
+    if (r > maxOriginR && r > 1e-6) {
+      target.set(c, m.map(v => v * (maxOriginR / r)));
+    }
+  });
+
   const nearest = new Map();
   target.forEach((m, c) => {
     let best = null, bestD = Infinity;
@@ -106,12 +116,13 @@ function compactClusters(points, labels) {
     nearest.set(c, [best, bestD]);
   });
   const dists = [...nearest.values()].map(x => x[1]).sort((a, b) => a - b);
-  const limit = dists[Math.floor(dists.length / 2)] * MAX_ISOLATION;
+  const limit = (dists[Math.floor(dists.length / 2)] || spread) * MAX_ISOLATION;
   nearest.forEach(([o, dd], c) => {
-    if (dd <= limit) return;
+    if (!o || dd <= limit || dd <= 1e-6) return;
     const m = target.get(c);
     target.set(c, m.map((v, d) => o[d] + (v - o[d]) * (limit / dd)));
   });
+
   return points.map((p, i) => {
     const m = centre.get(labels[i]), t = target.get(labels[i]);
     return p.map((v, d) => t[d] + (v - m[d]));
@@ -120,8 +131,56 @@ function compactClusters(points, labels) {
 
 function embed3d(n, neighbors, labels) {
   if (n < 8) return null;
+
+  // For large libraries (> 900 artists), embed the top 900 core artists with UMAP
+  // (~0.7s) and interpolate the long-tail artists around their cluster peers so
+  // 3,000–10,000 artists compute in < 1 second without serverless timeouts.
+  const MAX_UMAP_NODES = 900;
+  if (n > MAX_UMAP_NODES) {
+    const coreCount = MAX_UMAP_NODES;
+    const coreNeighbors = neighbors.slice(0, coreCount).map(list =>
+      list.filter(e => e.j < coreCount)
+    );
+    const coreLabels = labels.slice(0, coreCount);
+    const corePos = embed3d(coreCount, coreNeighbors, coreLabels);
+    if (!corePos) return null;
+
+    const clusterCenters = new Map();
+    coreLabels.forEach((c, i) => {
+      if (!clusterCenters.has(c)) clusterCenters.set(c, [0, 0, 0, 0]);
+      const acc = clusterCenters.get(c);
+      acc[0] += corePos[i][0];
+      acc[1] += corePos[i][1];
+      acc[2] += corePos[i][2];
+      acc[3] += 1;
+    });
+
+    const rand = mulberry32(99);
+    const full = new Array(n);
+    for (let i = 0; i < coreCount; i++) full[i] = corePos[i];
+    for (let i = coreCount; i < n; i++) {
+      const peer = neighbors[i].find(e => e.j < coreCount);
+      const c = labels[i];
+      const cc = clusterCenters.get(c);
+      const base = peer
+        ? corePos[peer.j]
+        : (cc && cc[3] > 0 ? [cc[0] / cc[3], cc[1] / cc[3], cc[2] / cc[3]] : [0, 0, 0]);
+      full[i] = [
+        Number((base[0] + (rand() - 0.5) * 0.28).toFixed(4)),
+        Number((base[1] + (rand() - 0.5) * 0.28).toFixed(4)),
+        Number((base[2] + (rand() - 0.5) * 0.28).toFixed(4))
+      ];
+    }
+    return full;
+  }
+
+  const clusterPeers = new Map();
+  labels.forEach((c, i) => {
+    if (!clusterPeers.has(c)) clusterPeers.set(c, []);
+    clusterPeers.get(c).push(i);
+  });
+
   const k = Math.min(EMBED_NEIGHBORS, n - 1);
-  // Each row: self first, then most similar neighbours.
   const knnIndices = [];
   const knnDistances = [];
   for (let i = 0; i < n; i++) {
@@ -132,9 +191,15 @@ function embed3d(n, neighbors, labels) {
       idx.push(j);
       dist.push(1 - Math.min(1, w));
     }
-    // Pad with unrelated artists at full distance, like a dense kNN would. Padding
-    // with same-cluster artists instead cuts every link between clusters, and UMAP
-    // then flings the clusters apart as separate islands.
+    const peers = clusterPeers.get(labels[i]) || [];
+    const peerTarget = Math.min(k - 2, Math.max(4, Math.floor(k * 0.65)));
+    for (let p = 0; idx.length < peerTarget && p < peers.length; p++) {
+      const peerIdx = peers[(i * 31 + p * 17) % peers.length];
+      if (!idx.includes(peerIdx)) {
+        idx.push(peerIdx);
+        dist.push(0.42);
+      }
+    }
     for (let s = 1; idx.length < k; s++) {
       const j = (i + s * 7919) % n;
       if (!idx.includes(j)) { idx.push(j); dist.push(1); }
@@ -143,7 +208,7 @@ function embed3d(n, neighbors, labels) {
     knnDistances.push(dist);
   }
 
-  const umap = new UMAP({ nComponents: 3, nNeighbors: k, minDist: 0.3, spread: 1.0, nEpochs: n > 4000 ? 150 : 300, random: mulberry32(7) });
+  const umap = new UMAP({ nComponents: 3, nNeighbors: k, minDist: 0.35, spread: 1.0, nEpochs: n > 600 ? 180 : 250, random: mulberry32(7) });
   umap.setPrecomputedKNN(knnIndices, knnDistances);
   umap.setSupervisedProjection(labels, { targetWeight: EMBED_CLUSTER_WEIGHT });
   const raw = umap.fit(Array.from({ length: n }, (_, i) => [i]));
@@ -163,10 +228,8 @@ function embed3d(n, neighbors, labels) {
  */
 export function clusterArtists(artists, collabs, together = new Map()) {
   const byId = new Map(artists.map(a => [a.id, a]));
-  // Bigger libraries earn more clusters, within what a legend can still show.
-  const maxClusters = Math.max(8, Math.min(16, Math.round(Math.sqrt(artists.length) * 0.9)));
+  const maxClusters = Math.max(8, Math.min(14, Math.round(Math.sqrt(artists.length) * 0.7)));
 
-  // Tag TF-IDF vectors (genres + "@country") as sorted sparse arrays, and family vectors.
   const n = artists.length;
   artists.forEach(a => {
     a.countries = a.countries || [];
@@ -212,12 +275,17 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     return s;
   };
   const pairKey = (x, y) => (x < y ? `${x}|${y}` : `${y}|${x}`);
-  const rawSim = (a, b) => {
+
+  const musicalSim = (a, b) => {
     let w = 0;
     if (a.vecIdx.length && b.vecIdx.length) w = 0.55 * sparseDot(a, b) + 0.45 * famDot(a, b);
     const shared = collabs.get(pairKey(a.id, b.id)) || 0;
     if (shared) w += Math.min(1, 0.45 * shared);
-    // Listening context only speaks for artists genres can't place.
+    return w;
+  };
+
+  const rawSim = (a, b) => {
+    let w = musicalSim(a, b);
     if (!a.genres.length || !b.genres.length) {
       const t = together.get(pairKey(a.id, b.id)) || 0;
       if (t) w += TOGETHER_MAX * Math.min(1, t / TOGETHER_FULL);
@@ -225,10 +293,6 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     return w;
   };
 
-  // Candidate pairs only (comparing every pair is quadratic: 10k artists would be 50M
-  // comparisons). Rare tags contribute all their artists; common tags ("hip hop") a
-  // fixed-size slice that starts at a different place for each artist, so neighbours
-  // still come from the same scene while the work stays bounded.
   const postings = new Map();
   artists.forEach((a, i) => a.vecIdx.forEach(t => {
     if (!postings.has(t)) postings.set(t, []);
@@ -245,6 +309,7 @@ export function clusterArtists(artists, collabs, together = new Map()) {
   });
 
   const neighbors = new Array(n);
+  const musicalNeighbors = new Array(n);
   const seen = new Int32Array(n).fill(-1);
   for (let i = 0; i < n; i++) {
     const a = artists[i];
@@ -264,23 +329,26 @@ export function clusterArtists(artists, collabs, together = new Map()) {
       }
     }
     (collabPartners.get(a.id) || []).forEach(add);
+
+    musicalNeighbors[i] = cand
+      .map(j => ({ j, w: musicalSim(a, artists[j]) }))
+      .filter(e => e.w > 0)
+      .sort((x, y) => y.w - x.w || pairHash(i, x.j) - pairHash(i, y.j))
+      .slice(0, MAX_NEIGHBORS);
+
     neighbors[i] = cand
       .map(j => ({ j, w: rawSim(a, artists[j]) }))
       .filter(e => e.w > 0)
-      // Ties (e.g. artists known only by country) break by a pair hash, not list order;
-      // list order chains tied artists into a line in the 3D map.
       .sort((x, y) => y.w - x.w || pairHash(i, x.j) - pairHash(i, y.j))
       .slice(0, MAX_NEIGHBORS);
   }
 
-  // Graph edges (symmetric, thresholded) for Louvain and cluster linkage.
   const edgeW = new Map();
-  neighbors.forEach((list, i) => list.forEach(({ j, w }) => {
+  musicalNeighbors.forEach((list, i) => list.forEach(({ j, w }) => {
     if (w >= EDGE_THRESHOLD) edgeW.set(i < j ? i * n + j : j * n + i, w);
   }));
   const edges = [...edgeW].map(([k, w]) => [Math.floor(k / n), k % n, w]);
 
-  // Louvain communities.
   const graph = new Graph({ type: 'undirected' });
   artists.forEach(a => graph.addNode(a.id));
   edges.forEach(([i, j, w]) => graph.addEdge(artists[i].id, artists[j].id, { weight: w }));
@@ -288,7 +356,6 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     ? louvain(graph, { getEdgeWeight: 'weight', resolution: LOUVAIN_RESOLUTION, rng: mulberry32(42) })
     : {};
 
-  // label[i] = cluster index or -1 (orphan, no edges).
   const label = new Int32Array(n).fill(-1);
   const communityIndex = new Map();
   artists.forEach((a, i) => {
@@ -298,11 +365,10 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     label[i] = communityIndex.get(c);
   });
 
-  // Cluster-to-cluster edge weight sums, recomputed after merges (linear in edges).
-  const interSums = () => {
+  const interSums = (lbl = label) => {
     const sums = new Map();
     for (const [i, j, w] of edges) {
-      const a = label[i], b = label[j];
+      const a = lbl[i], b = lbl[j];
       if (a < 0 || b < 0 || a === b) continue;
       const k1 = `${a}|${b}`, k2 = `${b}|${a}`;
       sums.set(k1, (sums.get(k1) || 0) + w);
@@ -310,9 +376,9 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     }
     return sums;
   };
-  const sizesOf = () => {
+  const sizesOf = (lbl = label) => {
     const sizes = new Map();
-    label.forEach(c => { if (c >= 0) sizes.set(c, (sizes.get(c) || 0) + 1); });
+    lbl.forEach(c => { if (c >= 0) sizes.set(c, (sizes.get(c) || 0) + 1); });
     return sizes;
   };
   const bestTarget = (c, sums, sizes) => {
@@ -325,16 +391,21 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     return best;
   };
 
-  // Merge splinters (under ~1% of artists) into their best-linked neighbour, then
-  // overflow beyond maxClusters, smallest first.
-  const minClusterSize = Math.max(4, Math.round(n * 0.01));
+  // Dissolve or merge splinter clusters (< minClusterSize). Setting isolated splinters
+  // to -1 turns them into orphans so co-listening (`togetherScore`) places them into
+  // major clusters instead of leaving 2-artist or 3-artist micro-clusters!
+  const placedCount = label.filter(c => c >= 0).length;
+  const minClusterSize = Math.max(6, Math.round(placedCount * 0.025));
   for (let round = 0; round < 50; round++) {
     const sizes = sizesOf();
+    if (sizes.size <= 1) break;
     const sums = interSums();
     const small = [...sizes].filter(([, sz]) => sz < minClusterSize).sort((x, y) => x[1] - y[1]);
     if (!small.length) break;
     const relabel = new Map();
-    small.forEach(([c]) => relabel.set(c, bestTarget(c, sums, sizes)));
+    small.forEach(([c]) => {
+      relabel.set(c, bestTarget(c, sums, sizes));
+    });
     label.forEach((c, i) => { if (relabel.has(c)) label[i] = relabel.get(c); });
   }
   for (let sizes = sizesOf(); sizes.size > maxClusters; sizes = sizesOf()) {
@@ -343,36 +414,40 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     label.forEach((c, i) => { if (c === smallest) label[i] = target; });
   }
 
-  // Orphans join the cluster they resemble most (any similarity, summed), else Uncharted.
+  // Orphans join the cluster they resemble most (musical similarity), else wait for co-listening.
   const uncharted = [];
   const finalLabel = Int32Array.from(label);
   label.forEach((c, i) => {
     if (c >= 0) return;
     const score = new Map();
-    neighbors[i].forEach(({ j, w }) => { if (label[j] >= 0) score.set(label[j], (score.get(label[j]) || 0) + w); });
+    musicalNeighbors[i].forEach(({ j, w }) => { if (label[j] >= 0) score.set(label[j], (score.get(label[j]) || 0) + w); });
     let best = -1, bestScore = 0.02;
     score.forEach((s, d) => { if (s > bestScore) { bestScore = s; best = d; } });
     if (best >= 0) finalLabel[i] = best;
     else uncharted.push(artists[i].id);
   });
 
-  // Genre-less artists you play alongside genre-placed ones join those artists'
-  // cluster: concrete listening beats "same country" as evidence of sound.
-  const togetherScore = new Map(); // i → Map(cluster → weight)
-  together.forEach((t, k) => {
-    const [x, y] = k.split('|').map(id => byId.get(id));
-    if (!x || !y) return;
-    [[x, y], [y, x]].forEach(([p, q]) => {
-      if (p.genres.length || !q.genres.length || finalLabel[q.index] < 0) return;
-      if (!togetherScore.has(p.index)) togetherScore.set(p.index, new Map());
-      const m = togetherScore.get(p.index);
-      m.set(finalLabel[q.index], (m.get(finalLabel[q.index]) || 0) + t);
+  // Genre-less artists you play alongside placed ones join those artists' cluster.
+  for (let pass = 0; pass < 4; pass++) {
+    const togetherScore = new Map();
+    together.forEach((t, k) => {
+      const [x, y] = k.split('|').map(id => byId.get(id));
+      if (!x || !y) return;
+      [[x, y], [y, x]].forEach(([p, q]) => {
+        if (p.genres.length || finalLabel[q.index] < 0) return;
+        if (pass === 0 && !q.genres.length) return;
+        if (!togetherScore.has(p.index)) togetherScore.set(p.index, new Map());
+        const m = togetherScore.get(p.index);
+        m.set(finalLabel[q.index], (m.get(finalLabel[q.index]) || 0) + t);
+      });
     });
-  });
-  togetherScore.forEach((m, i) => {
-    const [best, t] = [...m].sort((x, y) => y[1] - x[1])[0];
-    if (t >= TOGETHER_REASSIGN) finalLabel[i] = best;
-  });
+    const minWeight = pass === 0 ? TOGETHER_REASSIGN : 0.2;
+    togetherScore.forEach((m, i) => {
+      if (finalLabel[i] >= 0 && pass > 0) return;
+      const [best, t] = [...m].sort((x, y) => y[1] - x[1])[0];
+      if (t >= minWeight) finalLabel[i] = best;
+    });
+  }
   const stillUncharted = uncharted.filter(id => finalLabel[byId.get(id).index] < 0);
   uncharted.length = 0;
   uncharted.push(...stillUncharted);
@@ -385,7 +460,6 @@ export function clusterArtists(artists, collabs, together = new Map()) {
   });
   const described = describeClusters([...groups.values()], uncharted, byId, n);
 
-  // Assignment + bridges (mean similarity to each cluster's members, from neighbour lists).
   const clusterOf = new Map();
   const memberCount = new Map();
   described.forEach(c => {
@@ -396,7 +470,7 @@ export function clusterArtists(artists, collabs, together = new Map()) {
   artists.forEach((a, i) => {
     const own = clusterOf.get(a.id);
     const sum = new Map();
-    neighbors[i].forEach(({ j, w }) => {
+    musicalNeighbors[i].forEach(({ j, w }) => {
       const c = clusterOf.get(artists[j].id);
       sum.set(c, (sum.get(c) || 0) + w);
     });
@@ -419,7 +493,6 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     });
   });
 
-  // Cluster-to-cluster affinity (mean edge weight between members).
   const affinityMatrix = {};
   const pairSum = new Map();
   edges.forEach(([i, j, w]) => {
@@ -438,7 +511,6 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     });
   });
 
-  // 3D positions where distance means dissimilarity.
   const clusterIndex = new Map(described.map((c, i) => [c.id, i]));
   const embedding = embed3d(n, neighbors, artists.map(a => clusterIndex.get(clusterOf.get(a.id))));
   const positions = new Map();
