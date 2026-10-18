@@ -313,12 +313,14 @@ async function initApp() {
     hud.setNotice(null);
   }
 
-  async function loadLive({ historySummary = AppState.historySummary, useLocalHistory = true } = {}) {
+  async function loadLive({ historySummary = AppState.historySummary, useLocalHistory = true, skipInitialEnrich = false } = {}) {
     hud.setLoading(true);
     try {
       const { dataset, artistMeta, diagnostics } = await fetchUniverse(loadArtistMeta(), {
         historySummary,
-        useLocalHistory
+        useLocalHistory,
+        loggedIn: Boolean(authStatus.loggedIn),
+        skipInitialEnrich
       });
       saveArtistMeta(artistMeta);
       console.info('[Astra] universe diagnostics:', diagnostics);
@@ -357,7 +359,7 @@ async function initApp() {
     const run = ++enrichRun;
     const total = pending.length;
     let finished = 0;
-    const updateAction = { label: 'Update map', run: () => { enrichRun++; loadLive(); } };
+    const updateAction = { label: 'Update map', run: () => { enrichRun++; loadLive({ skipInitialEnrich: true }); } };
     for (let i = 0; i < pending.length && run === enrichRun; i += ENRICH_BATCH) {
       if (!authStatus.missingScopes?.length) {
         hud.setNotice(`Looking up genres in the background: ${plural(finished, 'artist')} of ${total.toLocaleString()} done.`, finished ? updateAction : null);
