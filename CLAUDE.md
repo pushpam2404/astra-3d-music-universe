@@ -1,66 +1,103 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides comprehensive architectural and operational context to Claude Code and any AI coding agent working in this repository. Read this file and [`ASTRA_CONTEXT.md`](./ASTRA_CONTEXT.md) before modifying code.
 
-## Project
+---
 
-ASTRA is a Vite + Three.js app that renders Spotify listening data as a 3D "universe": genres → suns, artists → planets, tracks → satellites. The frontend is plain ES modules and vanilla JS/CSS with no framework. A small Express backend in `server/` handles Spotify OAuth and builds the live dataset.
+## 1. Project Overview
 
-## Commands
+**Astra** is a Vite + Three.js interactive 3D music observatory that maps a user's Spotify listening history and live Spotify library into a 3D celestial universe:
+
+* **Cluster Center Planet (`type: 'genre'`)**: A macro-genre or listening community discovered via Louvain community detection, rendered at the center of each cluster as a solid, non-glowing 3D planet (`SphereGeometry(node.baseRadius, 48, 48)` with `solarPlasmaShader.js`).
+* **Artist Planet (`type: 'artist'`)**: An individual artist positioned via 3D UMAP similarity + spherical cloud layout + 3D collision clearance, rendered via `InstancedMesh` (`SphereGeometry(1, 32, 32)` with `planetShader.js`).
+* **Song Moon (`type: 'track'`)**: An individual track orbiting its primary artist planet on an inclined orbit, rendered via `InstancedMesh` as a flat-faceted crystal (`IcosahedronGeometry(1, 0)` with `createMoonCrystalMaterial()` in `planetShader.js`).
+* **Connection Lines & Focus Tubes**: `LineSegments` for overview connections (`artist_genre`, `artist_bridge`, `track_artist`, `track_collab`) plus weighted 3D `CylinderGeometry` tubes and orbital rings when focusing on a specific artist or song.
+
+The frontend uses plain ES modules and vanilla JS/CSS (zero UI framework). A lightweight Express backend in `server/` (and `api/index.js` on Vercel) handles stateless Spotify OAuth, live signal fetching, and multi-source metadata enrichment (Wikidata, MusicBrainz, Last.fm).
+
+---
+
+## 2. Commands & Environment
 
 ```bash
 npm install
-npm run dev         # Express + Vite middleware at http://127.0.0.1:5173/ (restarts on server/ changes)
-npm run dev:client  # frontend only (plain vite; /api calls fail, presets still work)
-npm run build       # production build to dist/
-npm start           # NODE_ENV=production: Express serves dist/ plus /api
+npm run dev         # Express + Vite middleware (restarts on server/ changes)
+npm run dev:client  # Frontend-only Vite server
+npm run build       # Production Vite bundle -> dist/
+npm start           # NODE_ENV=production: Express serves dist/ + /api
 ```
 
-On Vercel, the Vite build output (`dist/`) is served statically. `vercel.json` rewrites `/api/*` to `api/index.js`, which exports the same Express app (`server/app.js`) on the original URL. `server/index.js` is only used for local runs.
+* **Running Server Preservation**: If a local server is already running (e.g., on port `5180` or `5173`) and serving `dist/` or Vite middleware, **do not kill or restart the server** unless explicitly asked—run `npx vite build` (`./node_modules/.bin/vite build`) so the user can simply refresh without losing background enrichment progress.
+* **Environment Variables (`.env`)**:
+  * `SPOTIFY_CLIENT_ID` & `SPOTIFY_CLIENT_SECRET`: Spotify Developer App credentials.
+  * `SESSION_SECRET`: Secret used to derive the AES-256-GCM key for the stateless `astra_session` cookie (falls back to `SPOTIFY_CLIENT_SECRET`).
+  * `LASTFM_API_KEY`: Optional but recommended; enables Last.fm track/artist tag enrichment (`server/lastfm.js`).
+  * `PORT`: Local server port (defaults to `5173`, often run on `5180`).
+* **Spotify Loopback Rule**: Spotify rejects `http://localhost`; always use `http://127.0.0.1:<PORT>/api/auth/callback`.
 
-There is no test suite, linter, or formatter configured. Verify changes by running the dev server in a browser. You can exercise `server/universeBuilder.js` in Node with a mock `api` object (`{ get(endpoint) }`).
+---
 
-The backend reads `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` from `.env` locally, or from Vercel environment variables (see `.env.example`). The redirect URI defaults to `<request origin>/api/auth/callback`, built from the `x-forwarded-*` headers. It must exactly match a Redirect URI registered in the Spotify dashboard. Spotify allows plain `http` only for an explicit loopback IP (`127.0.0.1`), never for `localhost`.
+## 3. Non-Negotiable Architectural & Visual Invariants
 
-## Architecture
+Any AI agent modifying Astra **must** preserve these invariants:
 
-`src/main.js` is the orchestrator. It owns a single mutable `AppState` object, constructs every engine/controller, wires the HUD callbacks, and runs the `requestAnimationFrame` loop. Most cross-module behavior is defined here, so read it first.
+### 3.1 Browser-Side History Assembly (Vercel 4.5 MB Limit Defense)
+* **Never** `POST` raw streaming history files or large `historySummary` payloads to `/api/universe`. Vercel serverless functions reject payloads over 4.5 MB with `HTTP 413 Payload Too Large`.
+* When browser-imported history (`historySummary`) or cached Spotify signals are used, `src/api/backendClient.js` (`buildBrowserHistoryUniverse`) runs `mergeSignalsAndRank` and `assembleUniverseFromSignals` (`src/etl/universeAssembler.js`) **entirely in the browser**.
+* When logged into Spotify, `/api/universe` is called with `{ signalsOnly: true, useLocalHistory: false }` so the server returns only lightweight Spotify OAuth signals.
 
-### Data flow
+### 3.2 Spotify Rate-Limit Defense (HTTP 429 Prevention)
+* **Never** call the Spotify Web API inside background enrichment loops.
+* Live Spotify OAuth signals (`topArtistsByRange`, `topTracksByRange`, `recent`, `saved`) are cached in `localStorage` under `astra_spotify_signals_v1` for **6 hours** (`SPOTIFY_CACHE_TTL_MS` in `src/api/backendClient.js`).
+* All artist genre/country enrichment goes exclusively through `POST /api/enrich` (`server/enrich.js` → Wikidata SPARQL, MusicBrainz, Last.fm) and is cached per artist in `localStorage` (`src/api/artistMetaCache.js`).
+* **Zero Hardcoding**: Never add hardcoded artist-to-genre or artist-to-country lookup tables.
 
-1. **Source dataset** — a raw `{ name, description, genres[], artists[], tracks[] }` object. It comes from one of:
-   - `config/presets.js` (`GALAXY_PRESETS.cosmic_synth`): the logged-out demo universe. There is no preset picker in the UI.
-   - the backend, via `GET /api/universe` (`src/api/backendClient.js`). It returns one combined universe, not one per time range. The response is `{ dataset, diagnostics }`, and the diagnostics are logged to both consoles.
-2. **`etl/graphNormalizer.js` → `buildUniverseGraph(dataset, timeMultiplier)`** turns the dataset into `{ nodes, edges, nodeMap }`. Radii are log10-normalized per tier using `basePlays` and `TIER_BOUNDS`. Edges are artist→genre (via `artist.genres` ids), track→artist (`track.artistId`), and collab (`track.featArtistId`). Node objects are mutated in place downstream: physics adds `position`/`velocity`, and the factory adds `meshGroup`/`sphereMesh`.
-3. **`loadDataset()` in main.js** tears down the old meshes, rebuilds the graph, lays it out, builds meshes with `CelestialFactory`, resyncs the HTML labels and the cluster list, and frames the camera. The demo and the live universe both go through it.
+### 3.3 100% Opaque 3D Celestial Bodies & Non-Glowing Central Cluster Planets
+* **No Translucent Soap Bubbles**: `createPlanetMaterial()`, `createMoonCrystalMaterial()` (`src/renderer/shaders/planetShader.js`), and `createSolarShaderMaterial()` (`src/renderer/shaders/solarPlasmaShader.js`) must all use `transparent: false`, `depthWrite: true`, and `depthTest: true`. Never toggle `depthWrite = false` on `artistMesh`, `trackMesh`, or `sphereMesh` during focus or lens modes.
+* **Solid, Non-Glowing Central Cluster Planet**: Every cluster has a solid 3D planet at its center (`buildGenreSun` in `src/renderer/celestialFactory.js`). Do **not** attach additive glow sprites (`corona`), nebula clouds (`NEBULA_OPACITY = 0.0`), vertex-wobble plasma halos, or post-processing bloom (`BLOOM_STRENGTH = 0.0` in `src/renderer/postProcessing.js`).
 
-### Per-frame loop (main.js `animate`)
+### 3.4 Crisp Black Border on Light-Colored Clusters
+* Light-colored clusters (e.g., pastel pink, lime green, mint, sky blue, yellow, peach, lavender) blend together when nodes overlap unless separated by a dark outline.
+* `solarPlasmaShader.js` and `planetShader.js` compute a screen-space silhouette outline using `radial = sqrt(max(0.0, 1.0 - ndotv * ndotv))` and `fwidth(radial)`, mixing the outer silhouette edge toward near-black (`vec3(0.012, 0.015, 0.025)`) with extra width/strength on higher-luminance cluster colors (`isLight`).
+* UI indicators (`.cluster-swatch`, `.label-dot`, `.chip-dot` in `src/style.css`) also carry a `1.5px solid rgba(0, 0, 0, 0.88)` border with no blurry colored box-shadow on swatches.
 
-`GalaxyLayoutEngine.step` (positions are a pure function of time) → `factory.updateTrackInstances` / `updateEdgeGeometry` / `updatePulses` → solar shader time → `updateNebulae` (fades a cluster's cloud as the camera enters it) → focus dimming (`updateFocus`; halos, nebulae and sun lights also scale with `factory.glow`, the View → Glow slider, which also sets bloom strength) → camera (`CameraFlightController`) → hover raycast every 3rd frame → `LabelProjector` → `EffectComposer` render (bloom). The camera uses `setViewOffset`, so the galaxy centers in the area the side panel leaves visible: beside it on desktop, above the bottom sheet on phones.
+### 3.5 Perceptually Distinct Cluster Palette (OKLab Farthest-Point + OKLCH Golden-Angle)
+* `src/config/genreTaxonomy.js` defines the 24-color `CLUSTER_COLORS` palette and precomputes `ORDERED_CLUSTER_COLORS` via greedy farthest-point sampling in **OKLab** perceptual space (`buildFarthestPointPalette`).
+* Clusters are sorted by size/plays descending in `server/clusterNaming.js` and `src/etl/graphNormalizer.js`, and assigned colors via `getDistinctClusterColor(index)` so the largest clusters always receive maximally distant colors and never collide.
+* If a universe has more than 24 clusters, `getDistinctClusterColor(index)` generates additional gamut-clamped colors in **OKLCH** using a `137.5°` golden-angle hue step (`oklchToHex`) rather than wrapping around with `%`.
 
-### Module layout
+### 3.6 Strict Lens & Focus Culling (Zero Orphan Lines or Floating Labels)
+* **In `CelestialFactory.updateFocus` (`src/renderer/celestialFactory.js`)**:
+  * When a Time/Memory Lens (`activeLens !== 'all'`) is active (either in Galaxy Overview or inside a selected Cluster), **only** nodes that match the active lens (`lensMatch.has(n.id)`) or are the primary parent artist of a lens-matched track (`lensArtistHasMatchTrack.has(n.id)`) remain visible (`focusTarget >= 1.1`). All non-matching artists and tracks are strictly culled (`focusTarget = 0.0, lensScale = 0.0`).
+  * **Never** use a fallback like `!clusterHasLensMatch` that lights up all nodes in a cluster when 0 nodes match the active lens—if 0 artists in a cluster match `Current rotation`, 0 artists should appear in 3D, matching `"No artists in this cluster match that memory filter."` in the side panel.
+  * When an Artist or Song is selected (`activeNode.type === 'artist' | 'track'`), unrelated song moons are culled (`focusTarget = 0.0, lensScale = 0.0`), while unrelated background artist planets and cluster centers dim into quiet matte spheres (`focusTarget = DIM_PLANET_FOCUS`) and are discarded in the fragment shader if they pass directly in front of the camera lens (`camDist < 28.0 && centerDist < 0.38`).
+  * **Hard Edge Invariant**: An edge is never drawn if either endpoint has `focusTarget < 0.65` or `lensScale <= 0.01`.
+* **In `LabelProjector` (`src/renderer/labelProjector.js`)**:
+  * Never show an HTML label for any artist or track with `focusTarget < 0.65` or `lensScale <= 0.01`.
+  * When `hasLens` is true (including inside Cluster Focus Mode), never label a node unless `nodeMatchesLens(node, activeLens)` is `true`.
+* **Synchronized Cluster Explorer (`src/ui/detailPanel.js`)**:
+  * Clicking an inline memory/era filter pill inside the Cluster detail panel invokes `onSetLens(f.id)` so the 3D canvas, top lens bar, and side-panel list always stay in sync.
 
-- `physics/galaxyLayout.js`: deterministic 3D layout in the style of an embedding cloud, with no force simulation. Each cluster is a 3D cloud of artists around its sun: a seeded random direction per artist, with radius proportional to the cube root of rank, so top artists sit near the center. Cluster centers sit on a Fibonacci sphere, ordered by affinity, and the sphere radius is solved so no two clouds overlap. Bridge artists (`genres.length === 2`) float between both clouds, and tracks orbit as moons. That cloud arrangement is only a silent fallback, for the demo and libraries under 8 artists. The real layout places artists at the server's UMAP embedding (`artist.embed`), scaled so the typical nearest-neighbour gap matches the cluster spacing, with each sun at its members' centroid. Distance means similarity, and size and brightness (`normScore`) mean listening. There is no user-facing arrangement switch; the user chose similarity only. Artists are static; the camera auto-rotates instead (OrbitControls `autoRotate`, speed set by Motion). The layout writes `clusterRadius`, `labelRank`, `isBridge` and `systemRadius` onto nodes. Tunables are in `config/constants.js` (`LAYOUT_CONFIG`, `TIER_BOUNDS`).
-- `config/genreTaxonomy.js`: maps fine genre strings to broad families (with colors) by keyword. It is shared by the server and the browser.
-- `renderer/`: scene setup, mesh construction (`celestialFactory.js`), which builds for scale. Suns are individual meshes. All artists are one `InstancedMesh` (`shaders/planetShader.js`, where `aInfo` holds listen, focus and band seed per instance), and only the top `HALO_LIMIT` artists get halo sprites. All tracks are one `InstancedMesh`; each track's `meshGroup` is a lightweight handle (`position` / `scale` / `visible`), so layout, layer and time-machine code treats it like a Group, and raycast hits resolve through `nodeFromHit`. All links are one `LineSegments`, with per-link opacity encoded in the vertex colors (additive blending), and pulses are one `InstancedMesh`. The factory also handles per-cluster nebula sprites and focus dimming (`fadeTargets`, instance colors, link colors). The rest of `renderer/`: GLSL shaders in `renderer/shaders/` (plain JS string exports), post-processing, and camera flight (overview framed by `setSceneRadius`). `labelProjector.js` places labels by priority with greedy overlap rejection. It creates every label lazily, the first time its node is a candidate. It writes to the DOM only on change and hides only labels that were shown in the previous frame. In dev, `window.__astra.loadDataset(dataset)` loads any dataset from the console, which is handy for stress tests.
-- `ui/hud.js`: everything around the galaxy. That covers the top bar (search, the View popover, the Spotify button) and the side panel, which is one slot showing either the cluster list or details, never both. It also handles the caption with its single notice line, and the loading overlay. `ui/detailPanel.js` renders cluster, artist and song details. It only shows real data: why something is in the universe (`ranks` per time range, `liked`, `recentPlays` from the server) and where its genres come from. It never shows invented stats.
-- UI principle: no fake numbers. Audio features are estimated server-side, so they aren't displayed. The audio synth, time-lapse, cinema recorder, autopilot, collide mode and GDPR-archive import were removed because they over-promised.
-- Styling is in `src/style.css`, with a star-atlas look: Instrument Serif for names, Instrument Sans for UI, and cluster colors as the only accents. Under 760px the side panel becomes a bottom sheet that rests lowered (just handle + heading, `Hud.peekHeight`), rises on tap/drag or when something is selected, and lowers on deselect. `hud.sheetCover()` feeds main.js's eased view offset so the galaxy centres between the top bar and the sheet. Touch taps get a 10px drag tolerance and fall back to the nearest sun/artist within 26px (`pickNearest`); phones cap pixel ratio at 1.5.
+### 3.7 3D Planet Collision Clearance
+* `src/physics/galaxyLayout.js` runs `resolveClusterArtistOverlaps` per cluster and `resolveArtistCollisions(artists, 18)` globally so no two artist planets overlap and no artist clips into its central cluster planet (`coreRadius`).
 
-### Backend (`server/`)
+---
 
-- `app.js` builds the `/api` Express app. `index.js` adds the Vite middleware (dev) or `dist/` (production) and listens.
-- `routes.js` handles `/api/auth/{status,login,callback,logout}` and `/api/universe`.
-- `spotify.js` implements the Authorization Code flow with the client secret. It refreshes access tokens automatically and retries on 429.
-- `sessions.js` keeps sessions stateless: the tokens are AES-256-GCM encrypted into the HttpOnly `astra_session` cookie, with a key derived from `SESSION_SECRET` (falling back to the client secret). Nothing is stored on the server, which is required for serverless. When a token is refreshed, the cookie is rewritten through `createApi`'s `onTokensRefreshed` callback.
-- `universeBuilder.js` merges every listening signal into one dataset. Songs are deduplicated by primary artist plus cleaned title (`cleanTitle`), because Spotify lists one song under several IDs, and each song keeps every source that mentioned it. The signals are: top artists and tracks for all three time ranges (paged), recently played, and Liked Songs (`/me/tracks`, needs `user-library-read`). Scores are weighted per source. Optional sources fail into diagnostics warnings instead of failing the load. `/api/auth/status` reports `missingScopes` for sessions from before a scope was added, and the HUD then offers RECONNECT. The builder works within the 2026 Development Mode API limits: batch `GET /artists?ids=` is removed, and track artists are used as-is (simplified objects); artist genres come back empty; followers and popularity are removed; audio features are unavailable, so features are derived deterministically from the id. It guarantees every track's primary artist exists as a node. In the output, the "genres" (suns) are clusters, and each artist's `genres` holds `[clusterId]` or `[clusterId, bridgeClusterId]`.
-- `genreEnrichment.js` (Wikidata) and `musicbrainz.js` look up artist metadata by exact Spotify artist ID, at a fixed few requests per chunk of artists. Wikidata provides genres, country and occupation; MusicBrainz provides country, tags and the MusicBrainz ID. `lastfm.js` runs in parallel with both, within `METADATA_BUDGET_MS`. For each artist, most-listened first, it asks for the tags of that artist's most-played track in the library (`track.getTopTags`). That disambiguates artists who share a name, since Last.fm merges them into one page. It falls back to `artist.getTopTags` when the track has no tags, and discards those fallback artist-page tags when they name a country that contradicts the one MusicBrainz or Wikidata knows (`places.js` → `tagsContradictCountry`). It runs at about 20 requests a second. Bump `LASTFM_METHOD_VERSION` in `universeBuilder.js` whenever the lookup method changes, so browsers re-check their cached artists. it needs `LASTFM_API_KEY` and does nothing without it. `tagFilter.js` strips junk community tags. All of these cache in memory, back off on rate limits, and never throw. Failures become diagnostics warnings.
-- There is no database. The browser is the persistent cache: `src/api/artistMetaCache.js` stores per-artist `{ g, c, t }` in `localStorage`, `POST /api/universe` sends it back as `knownMeta`, and the server only looks up artists it doesn't already know. Artists still waiting on Last.fm are left out of the returned `artistMeta`, so the next load retries them. Remembered genres are capped the same way as fresh ones, so a cached load clusters identically.
-- `enrich.js` (`enrichArtists`) holds the shared metadata lookup. A universe load enriches only the `INITIAL_ENRICH_LIMIT` (300) most-listened unknown artists and returns the rest as `diagnostics.pendingArtists`. The page then calls `POST /api/enrich` in batches of 40 while it's open, saves the results to the browser cache, and offers "Update map" to re-cluster.
-- `clustering.js` is sparse, so it scales to about 10k artists (about 7 s, 60 MB). Up to `EXACT_LIMIT` (2,500) artists every pair is compared exactly; above that, each artist is only compared with candidates that share a tag: rare tags contribute all their artists, common tags a fixed `COMMON_TAG_SLICE` window, plus collaborators. Each artist keeps its top `MAX_NEIGHBORS`, and merges, bridges, affinity and the UMAP neighbour lists all run on those lists instead of a full matrix. Overall, it builds an artist similarity graph (TF-IDF cosine over genre and `@country` tags, plus genre-family cosine, plus a collaboration bonus) and runs Louvain (`graphology-communities-louvain`, seeded). It absorbs splinter clusters (under about 1% of artists), places orphans with the cluster they resemble most (or in "Uncharted"), and marks bridge artists. `embed3d` runs UMAP (`umap-js`, seeded, about 0.75 s for 500 artists) on k-nearest-neighbours taken directly from the similarity matrix (distance = 1 − similarity), blended with cluster labels (`EMBED_CLUSTER_WEIGHT`). Short neighbour rows are padded with unrelated artists at distance 1, never with same-cluster ones, which would cut the links between clusters and scatter them as islands. The result is, to produce 3D positions where distance means dissimilarity. Short UMAP neighbour rows are padded with unrelated artists at distance 1, never with same-cluster ones; that would cut every link between clusters and scatter them as islands. `compactClusters` then pulls cluster centres in (members keep their offsets) so the average gap between clusters is at most `MAX_CLUSTER_GAP_RATIO` (5) times a cluster's own spread; clean clusters otherwise come out tight and far apart, and the client's nearest-neighbour scaling turns that into scattered islands. `compactClusters` also keeps any one cluster within `MAX_ISOLATION` × the median nearest-cluster distance. Neighbour ties break by a pair hash (`pairHash`), because list order chains tied artists, such as those known only by country, into a line. Listening context: `universeBuilder.js` → `listenedTogether` links artists liked within a few days of each other or played in the same session (`LIKED_WINDOW`/`SESSION_WINDOW`). In `clustering.js` that adds up to `TOGETHER_MAX` similarity for pairs where one side has no genres, and moves a genre-less artist into the cluster of genre-placed artists it's played with (`TOGETHER_REASSIGN`). Only 50 recent plays and Liked Songs feed it today; the history import will feed it properly. `clusterNaming.js` names clusters by distinctive genres (support × lift, with broad genres discounted), adds a demonym when the home country is concentrated, and falls back to "<Demonym> Scene" or "<Top artist> & Co.". Genre synonyms are merged in `normalizeGenre` (`genreTaxonomy.js`).
-- `server/` imports `src/config/genreTaxonomy.js`, so that file must stay importable in Node (no browser APIs).
+## 4. End-to-End Data & Rendering Flow
 
-## Notes
-
-- `docs/` holds detailed design blueprints (numbered 00–09) that the README links to, but `docs/` is in `.gitignore`, so it exists only locally.
-- The DOM structure and element ids live in `index.html`. Styling is in `src/style.css`.
+1. **Ingestion & Storage**:
+   * **Spotify OAuth**: `/api/auth/login` → `/api/auth/callback` sets the encrypted `astra_session` cookie. `src/api/backendClient.js` fetches live signals (`signalsOnly: true`) and caches them in `localStorage` for 6 hours.
+   * **Extended Streaming History**: Users import `Streaming_History_Audio_*.json` / `StreamingHistory_music_*.json` or `.json` snapshots via the **History** modal (`src/ui/hud.js`). `src/api/historyStorage.js` parses events via `parseStreamingEvents` (`src/etl/historyParser.js`) and persists `historySummary` in IndexedDB (`astra_history_db`).
+   * **Local Folder Auto-Detection**: `server/historyLoader.js` also detects a local `Spotify Extended Streaming History/` directory when running locally.
+2. **Universe Assembly & Clustering (`src/etl/universeAssembler.js` + `server/clustering.js`)**:
+   * `mergeSignalsAndRank` merges Spotify top charts, recent plays, Liked Songs, and `historySummary`, deduplicating tracks by normalized primary artist + cleaned track title and extracting featured collaborators.
+   * `assembleUniverseFromSignals` combines cached/enriched genre & country metadata, builds session co-listening pairs (`listenedTogether`), runs `clusterArtists` (TF-IDF + collaboration + co-listening similarity graph → seeded Louvain communities → seeded 3D UMAP embedding), and names clusters via `describeClusters` (`server/clusterNaming.js`).
+3. **Graph Normalization & Layout (`src/etl/graphNormalizer.js` + `src/physics/galaxyLayout.js`)**:
+   * `buildUniverseGraph` log-normalizes node radii (`TIER_BOUNDS`), assigns `ORDERED_CLUSTER_COLORS` by cluster size, and builds edges (`artist_genre`, `artist_bridge`, `track_artist`, `track_collab`).
+   * `GalaxyLayoutEngine.initializeNodePositions` seriates clusters by affinity on a Fibonacci sphere (`computeBalancedClusterAnchors`), blends artist UMAP offsets with spherical shells, runs 3D collision resolution, and assigns inclined lunar orbits to tracks.
+4. **Frame Loop (`src/main.js` → `animate`)**:
+   * `easeViewOffset()` centers the 3D viewport beside the desktop side panel or above the mobile bottom sheet.
+   * `layout.step()` updates orbiting song moon positions.
+   * `factory.updateArtistInstances()`, `updateTrackInstances()`, `updateEdgeGeometry()`, `updatePulses()`, `updateSolarShaders()`, and `updateFocus()` update GPU buffers and focus highlights.
+   * `pickNode()` raycasts every 3rd frame for hover states and handles multi-touch-safe tap/double-tap selection (`pointerdown`/`pointerup` ignores pinch-to-zoom gestures).
+   * `labelProjector.update()` projects and overlap-culls DOM labels, and `composer.render()` renders the frame.
