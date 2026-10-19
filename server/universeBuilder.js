@@ -90,7 +90,10 @@ export async function fetchLiveSpotifySignals(api) {
   };
 }
 
-export async function buildUniverseDataset(api, { knownMeta = {}, historySummary = null, signalsOnly = false } = {}) {
+export async function buildUniverseDataset(
+  api,
+  { knownMeta = {}, historySummary = null, signalsOnly = false, spotifyApiOnly = false } = {}
+) {
   const diagnostics = { warnings: [] };
   let topArtistsByRange = [[], [], []];
   let topTracksByRange = [[], [], []];
@@ -133,6 +136,7 @@ export async function buildUniverseDataset(api, { knownMeta = {}, historySummary
     saved,
     historySummary,
     connectedSpotify,
+    spotifyApiOnly,
     knownMeta,
     isFreshMetaFn: isFreshMeta
   });

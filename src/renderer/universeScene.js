@@ -30,14 +30,25 @@ export function createUniverseScene(canvasContainer) {
 
   canvasContainer.appendChild(renderer.domElement);
 
-  // 4. Orbit Controls
+  // 4. Orbit Controls (tuned for both desktop mouse and mobile one-finger orbit / two-finger pinch+pan)
+  const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches;
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  controls.dampingFactor = 0.06;
-  controls.minDistance = 6;
+  controls.dampingFactor = isCoarsePointer ? 0.085 : 0.06;
+  controls.minDistance = 5;
   controls.maxDistance = 850;
-  // Full rotation: the universe is a 3D cloud, so every side is worth seeing.
-  controls.zoomToCursor = true;
+  controls.enablePan = true;
+  controls.screenSpacePanning = true;
+  controls.rotateSpeed = isCoarsePointer ? 0.85 : 1.0;
+  controls.zoomSpeed = isCoarsePointer ? 1.3 : 1.0;
+  controls.panSpeed = isCoarsePointer ? 0.95 : 1.0;
+  // Disable zoomToCursor on touch devices so two-finger pinch-zoom zooms smoothly
+  // toward the current target rather than throwing the galaxy sideways off-screen.
+  controls.zoomToCursor = !isCoarsePointer;
+  controls.touches = {
+    ONE: THREE.TOUCH.ROTATE,
+    TWO: THREE.TOUCH.DOLLY_PAN
+  };
   // A slow turn makes the depth readable; the Motion slider controls its speed.
   controls.autoRotate = true;
   controls.autoRotateSpeed = 0.35;
@@ -83,7 +94,6 @@ function createStarfield() {
 
   for (let i = 0; i < starCount; i++) {
     const i3 = i * 3;
-    // Distribute in huge sphere shell
     const radius = 1600 + Math.random() * 1600;
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Astra · your music, mapped</title>
   <meta name="description" content="Connect Spotify and import your streaming history to explore everything you listen to as a 3D galaxy: genres as suns, artists as planets, songs as moons.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,7 +27,7 @@
     </div>
 
     <div class="top-actions">
-      <button id="history-btn" class="btn btn-history" type="button" title="Import or export listening history">History</button>
+      <button id="history-btn" class="btn btn-history" type="button" title="Import, export or toggle listening history">History</button>
       <button id="view-toggle-btn" class="btn btn-quiet" type="button" aria-expanded="false" aria-controls="view-panel">View</button>
       <button id="reset-camera-btn" class="btn btn-quiet" type="button">Show everything</button>
       <button id="spotify-btn" class="btn btn-spotify" type="button">Connect Spotify</button>
@@ -60,6 +60,7 @@
       <label><input type="checkbox" id="toggle-genres" checked> Clusters</label>
       <label><input type="checkbox" id="toggle-artists" checked> Artists</label>
       <label><input type="checkbox" id="toggle-tracks" checked> Songs</label>
+      <label><input type="checkbox" id="toggle-history-songs" checked> History songs</label>
       <label><input type="checkbox" id="toggle-edges" checked> Connections</label>
       <label><input type="checkbox" id="toggle-labels" checked> Names</label>
     </fieldset>
@@ -80,6 +81,13 @@
       <input type="range" id="cluster-spread-slider" min="0.6" max="2.2" step="0.05" value="1">
     </label>
   </section>
+
+  <!-- Floating touch/mobile navigation bar: quick zoom in, zoom out, and reset view -->
+  <div id="mobile-cam-controls" aria-label="Camera navigation controls">
+    <button type="button" id="cam-zoom-in-btn" class="cam-ctrl-btn" aria-label="Zoom in" title="Zoom in">+</button>
+    <button type="button" id="cam-zoom-out-btn" class="cam-ctrl-btn" aria-label="Zoom out" title="Zoom out">−</button>
+    <button type="button" id="cam-reset-btn" class="cam-ctrl-btn cam-ctrl-wide" aria-label="Show entire galaxy" title="Show entire galaxy">⟲ All</button>
+  </div>
 
   <!-- Right column: cluster/memory/song explorer, or details of whatever is selected. -->
   <aside id="side-panel" class="panel" aria-live="polite">
@@ -126,9 +134,19 @@
       <h2>Listening History · Import &amp; Export</h2>
       <button type="button" id="history-close-btn" class="btn btn-quiet" aria-label="Close">✕</button>
     </div>
-    <p class="modal-lead">Merge your Spotify Extended Streaming History (<code>Streaming_History_Audio_*.json</code>) or standard Account Data with your live Spotify stats to uncover past favorites, dormant gems and 2020–2026 eras.</p>
+    <p class="modal-lead">Merge your Spotify Extended Streaming History (<code>Streaming_History_Audio_*.json</code>) or standard Account Data with your live Spotify stats, or switch anytime to only the songs from the Spotify API.</p>
 
     <div id="history-status-box" class="history-status-box"></div>
+
+    <div class="modal-section" id="history-source-mode-section">
+      <h3>Active Songs &amp; Data Source</h3>
+      <p class="modal-sub">Choose whether to include all songs from your streaming history or keep only the songs and artists returned by the live Spotify API.</p>
+      <div class="modal-export-actions">
+        <button type="button" id="mode-merged-btn" class="btn btn-starlight">Spotify + History Songs</button>
+        <button type="button" id="mode-spotify-only-btn" class="btn">Spotify API Songs Only</button>
+        <button type="button" id="remove-history-btn" class="btn btn-danger-outline">Remove History Data</button>
+      </div>
+    </div>
 
     <div class="modal-section">
       <h3>Import History or Snapshot</h3>

@@ -54,7 +54,7 @@ export const SolarPlasmaVertexShader = /* glsl */ `
     p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
     vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
     m = m * m;
-    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,p3)));
   }
 
   void main() {
@@ -76,6 +76,7 @@ export const SolarPlasmaVertexShader = /* glsl */ `
 export const SolarPlasmaFragmentShader = /* glsl */ `
   uniform vec3 uPrimaryColor;
   uniform vec3 uCoreColor;
+  uniform float uOpacity;
   
   varying vec3 vNormal;
   varying vec3 vPosition;
@@ -88,9 +89,9 @@ export const SolarPlasmaFragmentShader = /* glsl */ `
     // Blend between deep genre color and white-hot solar filaments
     float heat = smoothstep(-0.4, 0.8, vNoise);
     vec3 surfaceColor = mix(uPrimaryColor * 0.7, uCoreColor, heat);
-    vec3 finalColor = surfaceColor + (uPrimaryColor * fresnel * 1.6);
+    vec3 finalColor = (surfaceColor + (uPrimaryColor * fresnel * 1.6)) * uOpacity;
 
-    gl_FragColor = vec4(finalColor, 1.0);
+    gl_FragColor = vec4(finalColor, uOpacity);
   }
 `;
 
@@ -98,9 +99,11 @@ export function createSolarShaderMaterial(hexColor, energy = 0.8) {
   return new THREE.ShaderMaterial({
     vertexShader: SolarPlasmaVertexShader,
     fragmentShader: SolarPlasmaFragmentShader,
+    transparent: true,
     uniforms: {
       uTime: { value: 0.0 },
       uEnergy: { value: energy },
+      uOpacity: { value: 1.0 },
       uPrimaryColor: { value: new THREE.Color(hexColor) },
       uCoreColor: { value: new THREE.Color('#FFFFFF') }
     }

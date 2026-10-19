@@ -1,8 +1,8 @@
 // src/ui/hud.js
 /**
- * Everything around the galaxy: top bar (search, History import/export, view settings,
- * Spotify), the Time & Memory Lens bar, the side panel (Clusters | Memories | Songs ⇄
- * Details), the caption and loading state.
+ * Everything around the galaxy: top bar (search, History import/export/source-toggle,
+ * view settings, Spotify), the Time & Memory Lens bar, mobile camera controls,
+ * the side panel (Clusters | Memories | Songs ⇄ Details), the caption and loading state.
  */
 import { SPOTIFY_LOGIN_URL, logout } from '../api/backendClient.js';
 import { nodeMatchesLens } from '../renderer/celestialFactory.js';
@@ -31,7 +31,7 @@ const $ = (id) => document.getElementById(id);
 
 export class Hud {
   /**
-   * @param {object} state  AppState (layers, nodes, activeLens)
+   * @param {object} state  AppState (layers, nodes, activeLens, spotifyApiOnly)
    * @param {object} cb     callbacks
    */
   constructor(state, cb) {
@@ -43,10 +43,19 @@ export class Hud {
     this.initSearch();
     this.initViewPanel();
     this.initLensBar();
+    this.initMobileCamControls();
     this.initSidePanel();
     this.initHistoryDialog();
     this.initSpotifyButton();
     $('reset-camera-btn').addEventListener('click', () => this.cb.onResetCamera());
+  }
+
+  /* ---------- Mobile Camera Quick Controls ---------- */
+
+  initMobileCamControls() {
+    $('cam-zoom-in-btn')?.addEventListener('click', () => this.cb.onZoomStep?.(0.7));
+    $('cam-zoom-out-btn')?.addEventListener('click', () => this.cb.onZoomStep?.(1.4));
+    $('cam-reset-btn')?.addEventListener('click', () => this.cb.onResetCamera?.());
   }
 
   /* ---------- Search ---------- */
@@ -76,6 +85,7 @@ export class Hud {
       if (!q) return close();
       results = this.state.nodes
         .filter(n => {
+          if (n.meshGroup?.visible === false) return false;
           if (n.name?.toLowerCase().includes(q)) return true;
           if (n.connectedArtists?.[0]?.toLowerCase().includes(q)) return true;
           if (n.history?.peakEra?.toLowerCase().includes(q)) return true;
@@ -113,7 +123,7 @@ export class Hud {
         const meta = n.type !== 'genre' ? itemMetaLabel(n) : `${n.neighbors?.size || 0} artists`;
         kind.textContent = meta || KIND_LABEL[n.type];
         li.append(dot, textWrap, kind);
-        li.addEventListener('mousedown', (e) => {
+        li.addEventListener('pointerdown', (e) => {
           e.preventDefault();
           choose(n);
         });
@@ -137,7 +147,7 @@ export class Hud {
         close();
       }
     });
-    input.addEventListener('blur', close);
+    input.addEventListener('blur', () => setTimeout(close, 150));
   }
 
   /* ---------- Time & Memory Lens bar ---------- */
@@ -207,6 +217,14 @@ export class Hud {
       });
     });
 
+    const histCheckbox = $('toggle-history-songs');
+    if (histCheckbox) {
+      histCheckbox.checked = !this.state.spotifyApiOnly && this.state.layers.historySongs !== false;
+      histCheckbox.addEventListener('change', (e) => {
+        this.cb.onToggleHistorySongs?.(e.target.checked);
+      });
+    }
+
     const bindSlider = (id, label, format, onChange) => {
       const input = $(id);
       try {
@@ -234,46 +252,110 @@ export class Hud {
     });
   }
 
-  restoreSettings() {
-    this.applyInitialSettings.forEach(apply => apply());
+  syncHistoryToggleUI() {
+    const histCheckbox = $('toggle-history-songs');
+    const includeHistory = !this.state.spotifyApiOnly && this.state.layers.historySongs !== false;
+    if (histCheckbox) histCheckbox.checked = includeHistory;
+
+    const mergedBtn = $('mode-merged-btn');
+    const spotifyOnlyBtn = $('mode-spotify-only-btn');
+    if (mergedBtn && spotifyOnlyBtn) {
+      mergedBtn.classList.toggle('btn-starlight', includeHistory);
+      spotifyOnlyBtn.classList.toggle('btn-starlight', !includeHistory);
+    }
   }
 
-  /* ---------- Side panel (Clusters | Memories | Songs) ---------- */
+  restoreSettings() {
+    this.applyInitialSettings.forEach(apply => apply());
+    this.syncHistoryToggleUI();
+  }
+
+  /* ---------- Side panel (Clusters | Memories | Songs) with smooth mobile gestures ---------- */
 
   initSidePanel() {
     $('detail-back-btn').addEventListener('click', () => this.cb.onBack());
 
     document.querySelectorAll('.panel-tab').forEach(btn => {
-      btn.addEventListener('click', () => this.setSideTab(btn.dataset.tab));
+      btn.addEventListener('click', () => {
+        this.setSideTab(btn.dataset.tab);
+        if (this.isPhone() && !this.sheetOpen) this.setSheet(true);
+      });
     });
 
     const panel = $('side-panel');
     const handle = $('sheet-handle');
     let drag = null;
-    const grabbable = (e) => !this.sheetOpen || e.target === handle || handle.contains(e.target) || e.target.closest?.('.panel-header-row');
-    panel.addEventListener('pointerdown', (e) => {
-      if (!this.isPhone() || !grabbable(e)) return;
-      drag = { y: e.clientY, moved: 0 };
-      panel.setPointerCapture(e.pointerId);
+
+    handle.addEventListener('click', () => {
+      if (this.isPhone()) this.setSheet(!this.sheetOpen);
     });
+
+    // Mobile sheet drag: never hijack taps on buttons/tabs; only capture after > 7px vertical drag
+    panel.addEventListener('pointerdown', (e) => {
+      if (!this.isPhone()) return;
+      const isInteractive = e.target.closest?.('button:not(#sheet-handle), a, input, .panel-tabs');
+      if (isInteractive && this.sheetOpen) return;
+
+      const onHandleOrHeader = e.target === handle || handle.contains(e.target) || e.target.closest?.('.panel-header-row');
+      const scrollEl = !$('detail-view').hidden ? $('detail-view') : $('cluster-view');
+      const atScrollTop = (scrollEl?.scrollTop || 0) <= 2;
+
+      if (!this.sheetOpen || onHandleOrHeader || atScrollTop) {
+        drag = {
+          pointerId: e.pointerId,
+          startY: e.clientY,
+          moved: 0,
+          captured: false,
+          onHandleOrHeader: Boolean(onHandleOrHeader),
+          isInteractive: Boolean(isInteractive)
+        };
+      }
+    });
+
     panel.addEventListener('pointermove', (e) => {
-      if (!drag) return;
-      drag.moved = e.clientY - drag.y;
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const dy = e.clientY - drag.startY;
+
+      // If open and user is scrolling down the list (dy < 0) inside content, let native scroll work
+      if (this.sheetOpen && !drag.onHandleOrHeader && dy < 0) {
+        drag = null;
+        return;
+      }
+
+      if (!drag.captured && Math.abs(dy) > 8) {
+        drag.captured = true;
+        try { panel.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      }
+
+      if (!drag.captured) return;
+      drag.moved = dy;
       const base = this.sheetOpen ? 0 : panel.offsetHeight - this.peekHeight();
       panel.style.transition = 'none';
       panel.style.transform = `translateY(${Math.max(0, base + drag.moved)}px)`;
     });
-    const end = () => {
-      if (!drag) return;
+
+    const endDrag = (e) => {
+      if (!drag || (e.pointerId !== undefined && e.pointerId !== drag.pointerId)) return;
+      const { moved, captured, onHandleOrHeader, isInteractive } = drag;
+      drag = null;
       panel.style.transition = '';
       panel.style.transform = '';
-      const { moved } = drag;
-      drag = null;
-      if (Math.abs(moved) < 6) this.setSheet(!this.sheetOpen);
-      else this.setSheet(moved < 0);
+
+      if (!captured) {
+        if (!this.sheetOpen && onHandleOrHeader && !isInteractive) {
+          this.setSheet(true);
+        }
+        return;
+      }
+      if (Math.abs(moved) > 28) {
+        this.setSheet(moved < 0);
+      } else {
+        this.setSheet(this.sheetOpen);
+      }
     };
-    panel.addEventListener('pointerup', end);
-    panel.addEventListener('pointercancel', end);
+
+    panel.addEventListener('pointerup', endDrag);
+    panel.addEventListener('pointercancel', endDrag);
     this.sheetOpen = false;
     this.setSheet(false);
   }
@@ -300,7 +382,7 @@ export class Hud {
   }
 
   peekHeight() {
-    return 84;
+    return 88;
   }
 
   setSheet(open) {
@@ -338,9 +420,14 @@ export class Hud {
     const hasLens = lens !== 'all';
 
     list.replaceChildren(...this.suns
+      .filter(sun => sun.meshGroup?.visible !== false)
       .slice()
       .sort((a, b) => (b.neighbors?.size || 0) - (a.neighbors?.size || 0))
       .map(sun => {
+        const visibleArtists = [...(sun.neighbors || [])]
+          .map(id => this.state.nodeMap.get(id))
+          .filter(n => n && n.type === 'artist' && n.meshGroup?.visible !== false);
+
         const li = document.createElement('li');
         li.className = 'cluster-item';
         li.tabIndex = 0;
@@ -362,13 +449,11 @@ export class Hud {
         const count = document.createElement('span');
         count.className = 'cluster-count';
         if (hasLens) {
-          const matchingArtists = [...(sun.neighbors || [])]
-            .map(id => this.state.nodeMap.get(id))
-            .filter(n => n && nodeMatchesLens(n, lens)).length;
-          count.textContent = `${matchingArtists}/${sun.neighbors?.size || 0}`;
+          const matchingArtists = visibleArtists.filter(n => nodeMatchesLens(n, lens)).length;
+          count.textContent = `${matchingArtists}/${visibleArtists.length}`;
           count.title = 'Matching artists in this lens';
         } else {
-          count.textContent = sun.neighbors?.size || 0;
+          count.textContent = visibleArtists.length;
           count.title = 'Artists';
         }
         li.append(swatch, text, count);
@@ -390,8 +475,8 @@ export class Hud {
     const container = $('memories-list');
     if (!container) return;
 
-    const tracks = this.state.nodes.filter(n => n.type === 'track' && n.history?.plays);
-    const artists = this.state.nodes.filter(n => n.type === 'artist' && n.history?.plays);
+    const tracks = this.state.nodes.filter(n => n.type === 'track' && n.meshGroup?.visible !== false && n.history?.plays);
+    const artists = this.state.nodes.filter(n => n.type === 'artist' && n.meshGroup?.visible !== false && n.history?.plays);
 
     if (!tracks.length && !artists.length) {
       container.replaceChildren();
@@ -504,7 +589,7 @@ export class Hud {
 
   /**
    * Renders the "Songs" tab: lets the user browse and sort all songs in the universe
-   * (automatically filtered by the active Time & Memory Lens).
+   * (automatically filtered by the active Time & Memory Lens and history toggle).
    */
   renderSongsBrowser() {
     const container = $('songs-browser');
@@ -512,20 +597,20 @@ export class Hud {
 
     const lens = this.state.activeLens || 'all';
     const allTracks = this.state.nodes
-      .filter(n => n.type === 'track' && nodeMatchesLens(n, lens))
+      .filter(n => n.type === 'track' && n.meshGroup?.visible !== false && nodeMatchesLens(n, lens))
       .sort((a, b) => (b.history?.plays || b.plays || 0) - (a.history?.plays || a.plays || 0));
 
     if (!allTracks.length) {
       const p = document.createElement('p');
       p.className = 'empty-note';
-      p.textContent = 'No songs match the selected memory lens.';
+      p.textContent = 'No songs match the selected filter.';
       container.replaceChildren(p);
       return;
     }
 
     const countNote = document.createElement('p');
     countNote.className = 'memory-group-sub';
-    countNote.textContent = `Showing top ${Math.min(150, allTracks.length)} of ${allTracks.length.toLocaleString()} songs${lens !== 'all' ? ' in this lens' : ''}. Click any song to fly to its moon.`;
+    countNote.textContent = `Showing top ${Math.min(150, allTracks.length)} of ${allTracks.length.toLocaleString()} songs${lens !== 'all' ? ' in this lens' : ''}. Tap any song to fly to its moon.`;
 
     const ul = document.createElement('ul');
     ul.className = 'song-list';
@@ -557,7 +642,7 @@ export class Hud {
     container.replaceChildren(countNote, ul);
   }
 
-  /* ---------- History Import & Export Dialog ---------- */
+  /* ---------- History Import, Source Mode & Export Dialog ---------- */
 
   initHistoryDialog() {
     const dialog = $('history-dialog');
@@ -571,14 +656,36 @@ export class Hud {
     const dropzone = $('history-dropzone');
     const exportJsonBtn = $('export-json-btn');
     const exportCsvBtn = $('export-csv-btn');
+    const mergedBtn = $('mode-merged-btn');
+    const spotifyOnlyBtn = $('mode-spotify-only-btn');
+    const removeHistoryBtn = $('remove-history-btn');
 
     openBtn.addEventListener('click', () => {
       this.updateHistoryDialogStatus();
+      this.syncHistoryToggleUI();
       dialog.showModal();
     });
     closeBtn.addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', (e) => {
       if (e.target === dialog) dialog.close();
+    });
+
+    mergedBtn?.addEventListener('click', () => {
+      this.cb.onToggleHistorySongs?.(true);
+      this.syncHistoryToggleUI();
+      this.updateHistoryDialogStatus();
+    });
+    spotifyOnlyBtn?.addEventListener('click', () => {
+      this.cb.onToggleHistorySongs?.(false);
+      this.syncHistoryToggleUI();
+      this.updateHistoryDialogStatus();
+      dialog.close();
+    });
+    removeHistoryBtn?.addEventListener('click', async () => {
+      await this.cb.onRemoveHistory?.();
+      this.syncHistoryToggleUI();
+      this.updateHistoryDialogStatus();
+      dialog.close();
     });
 
     folderBtn.addEventListener('click', () => folderInput.click());
@@ -647,6 +754,7 @@ export class Hud {
     const localBtn = $('use-local-history-btn');
     const hm = this.state.rawDataset?.historyMeta;
     const local = this.authStatus?.localHistory;
+    const spotifyOnly = Boolean(this.state.spotifyApiOnly || this.state.layers.historySongs === false);
 
     if (local?.available) {
       localBtn.hidden = false;
@@ -655,7 +763,15 @@ export class Hud {
       localBtn.hidden = true;
     }
 
-    if (hm?.validPlays) {
+    if (spotifyOnly) {
+      box.innerHTML = `
+        <div class="status-pill-row">
+          <span class="status-dot is-active"></span>
+          <strong>Spotify API Mode: History-only songs hidden</strong>
+        </div>
+        <p class="status-detail">Showing only the artists and songs returned by the Spotify API. Switch back to "Spotify + History Songs" anytime to restore all historical plays.</p>
+      `;
+    } else if (hm?.validPlays) {
       const years = Object.keys(hm.years || {}).sort();
       const yearSpan = years.length ? `${years[0]}–${years[years.length - 1]}` : `${hm.firstDate} to ${hm.lastDate}`;
       box.innerHTML = `
@@ -687,7 +803,8 @@ export class Hud {
   updateHistoryButtonBadge() {
     const btn = $('history-btn');
     const hm = this.state.rawDataset?.historyMeta;
-    if (hm?.validPlays) {
+    const includeHistory = !this.state.spotifyApiOnly && this.state.layers.historySongs !== false;
+    if (hm?.validPlays && includeHistory) {
       const k = hm.validPlays >= 1000 ? `${(hm.validPlays / 1000).toFixed(1)}k` : hm.validPlays;
       btn.textContent = `History · ${k}`;
       btn.classList.add('has-history');

@@ -68,7 +68,10 @@ export function enrichArtists(artists) {
  * fetching only lightweight live Spotify signals (if logged in) and small `/api/enrich`
  * genre batches (~2 KB each) so request bodies never exceed a few kilobytes.
  */
-async function buildBrowserHistoryUniverse(knownMeta = {}, { historySummary, loggedIn = false, skipInitialEnrich = false } = {}) {
+async function buildBrowserHistoryUniverse(
+  knownMeta = {},
+  { historySummary, loggedIn = false, skipInitialEnrich = false, spotifyApiOnly = false } = {}
+) {
   const diagnostics = { warnings: [], clientBuilt: true };
   let liveSignals = {
     topArtistsByRange: [[], [], []],
@@ -96,6 +99,7 @@ async function buildBrowserHistoryUniverse(knownMeta = {}, { historySummary, log
   const state = mergeSignalsAndRank({
     ...liveSignals,
     historySummary,
+    spotifyApiOnly,
     knownMeta: mergedKnown
   });
 
@@ -140,13 +144,14 @@ async function buildBrowserHistoryUniverse(knownMeta = {}, { historySummary, log
  */
 export async function fetchUniverse(
   knownMeta = {},
-  { historySummary = null, useLocalHistory = true, loggedIn = false, skipInitialEnrich = false } = {}
+  { historySummary = null, useLocalHistory = true, loggedIn = false, skipInitialEnrich = false, spotifyApiOnly = false } = {}
 ) {
-  if (historySummary?.isAstraHistorySummary) {
+  if (historySummary?.isAstraHistorySummary && !spotifyApiOnly) {
     return buildBrowserHistoryUniverse(knownMeta, {
       historySummary,
       loggedIn,
-      skipInitialEnrich
+      skipInitialEnrich,
+      spotifyApiOnly
     });
   }
 
@@ -155,7 +160,8 @@ export async function fetchUniverse(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       knownMeta: compactKnownMetaForPost(knownMeta),
-      useLocalHistory
+      useLocalHistory: spotifyApiOnly ? false : useLocalHistory,
+      spotifyApiOnly
     })
   });
 }

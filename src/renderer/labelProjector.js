@@ -14,8 +14,8 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<
  * label that would overlap an already placed one is hidden, so the screen never
  * turns into a pile of text.
  *
- * When a Time & Memory Lens is active (e.g. "Past favorites", "Dormant", "Early 2024"),
- * matching artists and songs are promoted to label candidates with their memory badge.
+ * When an Artist is selected, cluster labels fade away and only the selected artist,
+ * their collaborating artists, and their song moons are labeled.
  */
 export class LabelProjector {
   constructor(containerEl) {
@@ -98,17 +98,38 @@ export class LabelProjector {
 
     if (activeNode) {
       if (node.id === activeNode.id) return 0;
+
+      // Artist Isolation Mode: hide other clusters & unrelated nodes; show artist + collaborators + songs
+      if (activeNode.type === 'artist') {
+        if (node.type === 'genre') return -1;
+        if (node.type === 'artist' && activeNode.collaboratorArtistIds?.has(node.id)) {
+          return 1;
+        }
+        if (node.type === 'track' && activeNode.neighbors?.has(node.id)) {
+          if (activeNode.collabTrackIds?.has(node.id) || node.featArtistIds?.length) return 1.4;
+          if (hasLens && matchesLens) return 1.6;
+          return 2.0;
+        }
+        return -1;
+      }
+
+      // Song Isolation Mode: show song, primary artist, and collaborating artists
+      if (activeNode.type === 'track') {
+        if (node.type === 'genre') return -1;
+        if (node.type === 'artist' && activeNode.neighbors?.has(node.id)) return 1;
+        return -1;
+      }
+
+      // Cluster Focus Mode
       if (activeNode.neighbors?.has(node.id)) {
         if (node.type === 'genre') return 1;
         if (hasLens && matchesLens) return 1.5;
         return node.type === 'artist' ? 2 : 2.5;
       }
-      // When a cluster is selected, also surface its top songs that match the lens
       if (activeNode.type === 'genre' && node.type === 'track' && node.connectedGenres?.includes(activeNode.name)) {
         if (hasLens && matchesLens && (node.normScore ?? 0) > 0.35) return 2.8;
         if (!hasLens && (node.normScore ?? 0) > 0.72) return 3.2;
       }
-      if (node.type === 'genre') return 3.5;
       return -1;
     }
 
@@ -152,7 +173,7 @@ export class LabelProjector {
       if (priority < 0) continue;
 
       tempProjVec.copy(node.position);
-      tempProjVec.y += (node.currentRadius || node.baseRadius || 5) * scaleMultiplier + 1.5;
+      tempProjVec.y += (node.currentRadius || node.baseRadius || 5) * (node.lensScale || 1) * scaleMultiplier + 1.5;
       tempProjVec.project(camera);
       if (tempProjVec.z > 1 || tempProjVec.z < -1 || Math.abs(tempProjVec.x) > 1.1 || Math.abs(tempProjVec.y) > 1.1) continue;
 
@@ -196,12 +217,12 @@ export class LabelProjector {
       c.y = placedAt.y;
 
       const focused = activeNode && (c.priority <= 2.5);
-      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.88'));
+      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.92'));
       this.show(
         c.el,
         `translate(-50%, -100%) translate3d(${c.x.toFixed(0)}px, ${c.y.toFixed(0)}px, 0)`,
         opacity,
-        c.priority === 0,
+        c.priority === 0 || (activeNode?.type === 'artist' && c.priority === 1),
         showBadge
       );
       shownNow.add(c.el);

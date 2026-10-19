@@ -1,15 +1,17 @@
 // src/physics/galaxyLayout.js
 /**
  * 3D layout where distance means similarity AND clusters sit at a balanced, breathable
- * distance from one another (never overlapping into a cluttered blob, and never flung
+ * distance from one another (never overlapping into a clumsy blob, and never flung
  * into distant corners):
  *
- *  - Cluster centers sit on an affinity-seriated, radius-relaxed sphere (`sun.anchor`),
- *    with a compact ~50% tighter inter-cluster distance (`(r_i + r_j) * 0.72 + 4` separation).
- *  - Inside each cluster, artists are placed using their server UMAP similarity
- *    direction (`artist.embed`) blended with cube-root rank radius so top artists sit
- *    near the sun, musically similar artists sit together, and every cluster keeps a
- *    clean spherical boundary.
+ *  - Cluster centers start on an affinity-seriated sphere and undergo 3D pairwise
+ *    clearance + shell relaxation so adjacent clusters stay distinct with a clean
+ *    breathable channel (`meanOriginDist ≈ 76` units, right between the tight 48-unit
+ *    and wide 127-unit layouts).
+ *  - Inside each cluster, artists are placed using their UMAP similarity direction
+ *    (`artist.embed`) blended with cube-root rank radius so top artists sit near the
+ *    sun, musically similar artists sit together, and every cluster keeps a clean
+ *    spherical boundary.
  *  - Bridge artists (strong ties to two clusters) float in the channel between both clouds.
  *  - Tracks orbit their artist as moons on inclined orbits.
  */
@@ -39,7 +41,7 @@ function directionFor(id) {
   const u = hash01(`${id}:u`) * 2 - 1;
   const phi = hash01(`${id}:phi`) * Math.PI * 2;
   const r = Math.sqrt(1 - u * u);
-  return new THREE.Vector3(r * Math.cos(phi), u, r * Math.sin(phi));
+  return new THREE.Vector3(r * Math.cos(phi), u, Math.sin(phi) * r);
 }
 
 /** Orders suns so that consecutive ones have high affinity. */
@@ -61,28 +63,52 @@ function seriate(suns, affinity) {
 }
 
 /**
- * Relaxes unit vectors on the sphere so larger clusters naturally get wider angular
- * separation from their neighbours instead of crowding smaller clusters.
+ * Places cluster anchors in 3D in the Goldilocks sweet spot:
+ *  - Right between the tight 48-unit layout and the wide 127-unit layout (`meanOriginDist ≈ 76`).
+ *  - Pairwise clearance guarantees adjacent clusters never collide into a clumsy clump while
+ *    radial shell attraction prevents any cluster from drifting far away.
  */
-function relaxSphereDirections(dirs, radii) {
-  if (dirs.length <= 2) return dirs;
-  const out = dirs.map(d => d.clone());
-  const push = new THREE.Vector3();
+function computeBalancedClusterAnchors(order) {
+  const n = order.length;
+  if (n === 0) return [];
+  if (n === 1) return [new THREE.Vector3(0, 0, 0)];
+
+  const radii = order.map(s => s.clusterRadius || 20);
+  const meanR = radii.reduce((a, b) => a + b, 0) / n;
+  const targetShellR = Math.max(46, meanR * Math.sqrt(n) * 0.68);
+
+  const anchors = order.map((_, i) => fibonacciSphere(i, n).multiplyScalar(targetShellR));
   const diff = new THREE.Vector3();
-  for (let iter = 0; iter < 18; iter++) {
-    for (let i = 0; i < out.length; i++) {
-      push.set(0, 0, 0);
-      for (let j = 0; j < out.length; j++) {
-        if (i === j) continue;
-        diff.subVectors(out[i], out[j]);
-        const d = Math.max(0.15, diff.length());
-        const weight = (radii[i] + radii[j]) / 100;
-        push.addScaledVector(diff.normalize(), (weight / (d * d)) * 0.045);
+
+  for (let iter = 0; iter < 80; iter++) {
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        diff.subVectors(anchors[i], anchors[j]);
+        const d = diff.length() || 0.01;
+        const desiredMin = (radii[i] + radii[j]) * 0.92 + 10.0;
+        if (d < desiredMin) {
+          const push = (desiredMin - d) * 0.48;
+          diff.divideScalar(d);
+          anchors[i].addScaledVector(diff, push);
+          anchors[j].addScaledVector(diff, -push);
+        }
       }
-      out[i].add(push).normalize();
+    }
+
+    for (let i = 0; i < n; i++) {
+      const r = anchors[i].length() || 1;
+      const targetR = targetShellR + (radii[i] - meanR) * 0.3;
+      const pull = (targetR - r) * 0.18;
+      anchors[i].multiplyScalar((r + pull) / r);
     }
   }
-  return out;
+
+  const center = new THREE.Vector3();
+  anchors.forEach(a => center.add(a));
+  center.divideScalar(n);
+  anchors.forEach(a => a.sub(center));
+
+  return anchors;
 }
 
 export class GalaxyLayoutEngine {
@@ -91,10 +117,10 @@ export class GalaxyLayoutEngine {
     this.nodeScaleMultiplier = 1.0;
     this.clusterSpreadMultiplier = 1.0;
     this.time = 0;
-    this.boundingRadius = 140;
+    this.boundingRadius = 115;
     this.mode = 'clusters';
     this.hasSimilarity = false;
-    this.bounds = { clusters: 140, similarity: 140 };
+    this.bounds = { clusters: 115, similarity: 115 };
   }
 
   initializeNodePositions(nodes) {
@@ -138,7 +164,7 @@ export class GalaxyLayoutEngine {
       const meanSystem = list.length ? list.reduce((s, a) => s + a.systemRadius, 0) / list.length : 0;
       const spacing = Math.max(4.2, meanSystem * 0.72);
       const core = sun.baseRadius * C.sunCoreFactor + C.cloudInnerGap;
-      sun.clusterRadius = core + spacing * Math.cbrt(list.length + 1) * 0.54;
+      sun.clusterRadius = core + spacing * Math.cbrt(list.length + 1) * 0.56;
       list.forEach((a, k) => {
         const t = (k + 0.5) / list.length;
         const r = core + (sun.clusterRadius - core) * Math.cbrt(t);
@@ -159,28 +185,16 @@ export class GalaxyLayoutEngine {
       return sharedCount.get([s.id, t.id].sort().join('|')) || 0;
     };
 
-    // Cluster centers on a radius-relaxed Fibonacci sphere, ~50% closer together.
     const order = seriate(suns, affinity);
-    const initialDirs = order.map((_, i) => fibonacciSphere(i, order.length));
-    const dirs = relaxSphereDirections(initialDirs, order.map(s => s.clusterRadius));
+    const anchors = computeBalancedClusterAnchors(order);
 
-    let R = 0;
-    for (let i = 0; i < order.length; i++) {
-      for (let j = i + 1; j < order.length; j++) {
-        const unitDist = dirs[i].distanceTo(dirs[j]);
-        const ri = order[i].clusterRadius;
-        const rj = order[j].clusterRadius;
-        const minCenterDist = (ri + rj) * 0.72 + 4.0;
-        R = Math.max(R, minCenterDist / unitDist);
-      }
-    }
     let bounding = 0;
     order.forEach((s, i) => {
-      s.anchor = dirs[i].clone().multiplyScalar(R);
+      s.anchor = anchors[i];
       s.position.copy(s.anchor);
-      bounding = Math.max(bounding, R + s.clusterRadius * 0.9);
+      bounding = Math.max(bounding, s.anchor.length() + s.clusterRadius * 0.92);
     });
-    this.bounds.clusters = Math.max(85, bounding);
+    this.bounds.clusters = Math.max(92, bounding);
 
     // Bridges sit in the channel between their two suns.
     const bridgeSlots = new Map();

@@ -143,7 +143,7 @@ export class DetailPanel {
   }
 
   neighbors(node, type) {
-    return [...(node.neighbors || [])].map(id => this.ctx.resolve(id)).filter(n => n && n.type === type);
+    return [...(node.neighbors || [])].map(id => this.ctx.resolve(id)).filter(n => n && n.type === type && n.meshGroup?.visible !== false);
   }
 
   chipFor(node) {
@@ -153,13 +153,32 @@ export class DetailPanel {
     ]);
   }
 
-  songList(tracks, showArtistName = false) {
+  songList(tracks, showArtistName = false, currentArtistId = null) {
     return el('ul', { class: 'song-list' }, tracks.map(t => {
-      const artist = showArtistName ? this.ctx.resolve(t.artistId) : null;
+      const otherNames = [];
+      if (showArtistName) {
+        const artist = this.ctx.resolve(t.artistId);
+        if (artist) otherNames.push(artist.name);
+      } else if (currentArtistId) {
+        if (t.artistId && t.artistId !== currentArtistId) {
+          const primary = this.ctx.resolve(t.artistId);
+          if (primary) otherNames.push(primary.name);
+        }
+        (t.featArtistIds || []).forEach(fId => {
+          if (fId !== currentArtistId) {
+            const fa = this.ctx.resolve(fId);
+            if (fa && !otherNames.includes(fa.name)) otherNames.push(fa.name);
+          }
+        });
+      }
+      const collabSub = otherNames.length
+        ? (showArtistName ? otherNames.join(', ') : `with ${otherNames.join(', ')}`)
+        : null;
+
       return el('li', {}, el('button', { type: 'button', onclick: () => this.ctx.onSelect(t) }, [
         el('span', { class: 'song-main' }, [
           el('span', { class: 'song-title', text: t.name }),
-          artist ? el('span', { class: 'song-sub', text: artist.name }) : null
+          collabSub ? el('span', { class: 'song-sub', text: collabSub }) : null
         ]),
         el('span', { class: 'song-meta', text: itemMetaLabel(t) })
       ]));
@@ -308,8 +327,13 @@ export class DetailPanel {
   }
 
   renderArtist(node) {
-    const clusters = this.neighbors(node, 'genre');
+    const clusters = [...(node.neighbors || [])].map(id => this.ctx.resolve(id)).filter(n => n && n.type === 'genre');
     const tracks = this.neighbors(node, 'track').sort((a, b) => (b.history?.plays || b.plays) - (a.history?.plays || a.plays));
+    const collaborators = [...(node.collaboratorArtistIds || [])]
+      .map(id => this.ctx.resolve(id))
+      .filter(a => a && a.meshGroup?.visible !== false)
+      .sort((a, b) => (b.history?.plays || b.plays) - (a.history?.plays || a.plays));
+
     const parts = [
       el('p', { class: 'detail-kind', text: node.isBridge ? 'Artist between two clusters' : 'Artist' }),
       el('h2', { class: 'detail-title', text: node.name })
@@ -318,6 +342,10 @@ export class DetailPanel {
 
     const histCard = renderHistoryCard(node);
     if (histCard) parts.push(histCard);
+
+    if (collaborators.length) {
+      parts.push(section(`Collaborators in your universe (${collaborators.length})`, el('div', { class: 'chips' }, collaborators.map(c => this.chipFor(c)))));
+    }
 
     if (!this.ctx.isDemo()) {
       const reasons = RANGE_ORDER
@@ -343,33 +371,45 @@ export class DetailPanel {
     if (tracks.length) {
       let songFilter = 'all';
       const songContainer = el('div');
+      const collabTracksCount = tracks.filter(t => node.collabTrackIds?.has(t.id) || (t.featArtistIds?.length > 0)).length;
       const renderArtistSongs = () => {
-        const list = songFilter === 'all' ? tracks : tracks.filter(t => nodeMatchesLens(t, songFilter));
+        const list = songFilter === 'all'
+          ? tracks
+          : (songFilter === 'collabs'
+            ? tracks.filter(t => node.collabTrackIds?.has(t.id) || (t.featArtistIds?.length > 0))
+            : tracks.filter(t => nodeMatchesLens(t, songFilter)));
         songContainer.replaceChildren(
           list.length
-            ? this.songList(list)
+            ? this.songList(list, false, node.id)
             : el('p', { class: 'empty-note', text: 'No songs by this artist match that filter.' })
         );
       };
       renderArtistSongs();
 
-      const filterBar = tracks.length >= 4 && node.history ? el('div', { class: 'inline-filter-row' }, [
+      const filterDefs = [
         { id: 'all', label: `All (${tracks.length})` },
-        { id: 'past_fav', label: 'Past favs' },
-        { id: 'dormant', label: 'Dormant' },
-        { id: 'era_2025', label: '2025' },
-        { id: 'era_2024', label: '2024' }
-      ].map(f => el('button', {
-        type: 'button',
-        class: `mini-pill${f.id === 'all' ? ' is-active' : ''}`,
-        text: f.label,
-        onclick: (e) => {
-          songFilter = f.id;
-          [...e.currentTarget.parentElement.children].forEach(b => b.classList.remove('is-active'));
-          e.currentTarget.classList.add('is-active');
-          renderArtistSongs();
-        }
-      }))) : null;
+        ...(collabTracksCount > 0 ? [{ id: 'collabs', label: `Collabs (${collabTracksCount})` }] : []),
+        ...(node.history ? [
+          { id: 'past_fav', label: 'Past favs' },
+          { id: 'dormant', label: 'Dormant' },
+          { id: 'era_2025', label: '2025' },
+          { id: 'era_2024', label: '2024' }
+        ] : [])
+      ];
+
+      const filterBar = (tracks.length >= 3 || collabTracksCount > 0) && filterDefs.length > 1
+        ? el('div', { class: 'inline-filter-row' }, filterDefs.map(f => el('button', {
+          type: 'button',
+          class: `mini-pill${f.id === 'all' ? ' is-active' : ''}`,
+          text: f.label,
+          onclick: (e) => {
+            songFilter = f.id;
+            [...e.currentTarget.parentElement.children].forEach(b => b.classList.remove('is-active'));
+            e.currentTarget.classList.add('is-active');
+            renderArtistSongs();
+          }
+        })))
+        : null;
 
       parts.push(section(`Your songs (${tracks.length})`, el('div', {}, [filterBar, songContainer])));
     } else if (!this.ctx.isDemo()) {
@@ -394,18 +434,28 @@ export class DetailPanel {
 
   renderSong(node) {
     const artist = this.ctx.resolve(node.artistId);
-    const feat = node.featArtistId ? this.ctx.resolve(node.featArtistId) : null;
-    const clusters = artist ? this.neighbors(artist, 'genre') : [];
-    const by = el('p', { class: 'detail-by' }, [
+    const featList = [...new Set([...(node.featArtistIds || []), ...(node.featArtistId ? [node.featArtistId] : [])])]
+      .filter(id => id && id !== node.artistId)
+      .map(id => this.ctx.resolve(id))
+      .filter(Boolean);
+    const clusters = artist ? [...(artist.neighbors || [])].map(id => this.ctx.resolve(id)).filter(n => n && n.type === 'genre') : [];
+
+    const byChildren = [
       'by ',
-      artist ? el('button', { type: 'button', text: artist.name, onclick: () => this.ctx.onSelect(artist) }) : (node.artistName || 'unknown artist'),
-      feat ? ' with ' : null,
-      feat ? el('button', { type: 'button', text: feat.name, onclick: () => this.ctx.onSelect(feat) }) : null
-    ]);
+      artist ? el('button', { type: 'button', text: artist.name, onclick: () => this.ctx.onSelect(artist) }) : (node.artistName || 'unknown artist')
+    ];
+    if (featList.length) {
+      byChildren.push(' with ');
+      featList.forEach((fa, idx) => {
+        if (idx > 0) byChildren.push(', ');
+        byChildren.push(el('button', { type: 'button', text: fa.name, onclick: () => this.ctx.onSelect(fa) }));
+      });
+    }
+
     const parts = [
       el('p', { class: 'detail-kind', text: ['Song', formatDuration(node.durationMs)].filter(Boolean).join(', ') }),
       el('h2', { class: 'detail-title', text: node.name }),
-      by
+      el('p', { class: 'detail-by' }, byChildren)
     ];
     if (clusters.length) {
       parts.push(el('div', { class: 'chips', style: 'margin-top:10px' }, clusters.map(c => this.chipFor(c))));

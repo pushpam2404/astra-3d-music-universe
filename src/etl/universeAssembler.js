@@ -99,6 +99,9 @@ export function listenedTogether(saved, recent, includedIds, historyPairs = [], 
  * Step 1: Merges live Spotify signals (if any) with `historySummary` (if any) and
  * ranks all artists and tracks. Returns intermediate state including `unknown`
  * artists that need genre metadata enrichment.
+ *
+ * When `spotifyApiOnly` is true (and Spotify signals exist), history-only tracks and
+ * artists are omitted so only items returned by the Spotify API are kept.
  */
 export function mergeSignalsAndRank({
   topArtistsByRange = [[], [], []],
@@ -107,6 +110,7 @@ export function mergeSignalsAndRank({
   saved = [],
   historySummary = null,
   connectedSpotify = false,
+  spotifyApiOnly = false,
   knownMeta = {},
   isFreshMetaFn = isFreshClientMeta
 } = {}) {
@@ -121,14 +125,17 @@ export function mergeSignalsAndRank({
   const artistRanks = new Map();
   const artistHistoryById = new Map();
   const artistIdByNorm = new Map();
+  const spotifyApiArtistIds = new Set();
+  const spotifyApiTrackIds = new Set();
 
   const addArtistScore = (id, s) => artistScore.set(id, (artistScore.get(id) || 0) + s);
 
-  const registerArtist = (artistObj) => {
+  const registerArtist = (artistObj, isFromSpotifyApi = false) => {
     const norm = normalizeArtistKey(artistObj.name);
     if (!norm) return null;
     const existingId = artistIdByNorm.get(norm);
     if (existingId) {
+      if (isFromSpotifyApi) spotifyApiArtistIds.add(existingId);
       const cur = artistsById.get(existingId);
       if (cur && (!cur.images?.length && artistObj.images?.length)) {
         artistsById.set(existingId, { ...cur, ...artistObj, id: existingId });
@@ -136,6 +143,7 @@ export function mergeSignalsAndRank({
       return existingId;
     }
     const id = artistObj.id || makeHistoryId('artist', norm);
+    if (isFromSpotifyApi) spotifyApiArtistIds.add(id);
     artistsById.set(id, { ...artistObj, id, genres: artistObj.genres || [] });
     artistIdByNorm.set(norm, id);
     return id;
@@ -144,7 +152,7 @@ export function mergeSignalsAndRank({
   topArtistsByRange.forEach((list, ri) => {
     const w = RANGE_WEIGHTS[ranges[ri]];
     (list || []).forEach((a, rank) => {
-      const id = registerArtist(a);
+      const id = registerArtist(a, true);
       if (!id) return;
       addArtistScore(id, w * 3000 * Math.pow(0.96, rank));
       if (!artistRanks.has(id)) artistRanks.set(id, {});
@@ -152,7 +160,7 @@ export function mergeSignalsAndRank({
     });
   });
 
-  const addTrack = (t, score, source) => {
+  const addTrack = (t, score, source, isFromSpotifyApi = false) => {
     if (!t || !t.id || t.is_local || !t.artists?.length) return;
     const primaryName = t.artists[0].name;
     const normArtist = normalizeArtistKey(primaryName);
@@ -160,7 +168,7 @@ export function mergeSignalsAndRank({
     if (!normArtist || !cleaned) return;
 
     const resolvedArtists = t.artists.map(a => {
-      const aId = registerArtist(a);
+      const aId = registerArtist(a, isFromSpotifyApi);
       return { ...a, id: aId };
     }).filter(a => a.id);
     if (!resolvedArtists.length) return;
@@ -171,12 +179,30 @@ export function mergeSignalsAndRank({
       id = t.id;
       canonicalTrackByArtistAndTitle.set(key, id);
       tracksById.set(id, { ...t, id, artists: resolvedArtists });
-      trackSources.set(id, { ranks: {}, liked: false, recentPlays: 0, history: null });
+      trackSources.set(id, { ranks: {}, liked: false, recentPlays: 0, history: null, fromSpotifyApi: isFromSpotifyApi });
     } else {
       const cur = tracksById.get(id);
-      if (cur && !cur.album && t.album) {
-        tracksById.set(id, { ...cur, ...t, id, artists: resolvedArtists });
+      if (cur) {
+        // Merge any additional featured artists discovered across sources
+        const existingArtistIds = new Set(cur.artists.map(a => a.id));
+        const mergedArtists = [...cur.artists];
+        resolvedArtists.forEach(ra => {
+          if (!existingArtistIds.has(ra.id)) {
+            existingArtistIds.add(ra.id);
+            mergedArtists.push(ra);
+          }
+        });
+        tracksById.set(id, {
+          ...cur,
+          ...(cur.album ? {} : t),
+          id,
+          artists: mergedArtists
+        });
       }
+    }
+    if (isFromSpotifyApi) {
+      spotifyApiTrackIds.add(id);
+      trackSources.get(id).fromSpotifyApi = true;
     }
     trackScore.set(id, (trackScore.get(id) || 0) + score);
     const src = trackSources.get(id);
@@ -188,10 +214,10 @@ export function mergeSignalsAndRank({
 
   topTracksByRange.forEach((list, ri) => {
     const w = RANGE_WEIGHTS[ranges[ri]];
-    (list || []).forEach((t, rank) => addTrack(t, w * 1400 * Math.pow(0.97, rank), { range: ranges[ri], rank: rank + 1 }));
+    (list || []).forEach((t, rank) => addTrack(t, w * 1400 * Math.pow(0.97, rank), { range: ranges[ri], rank: rank + 1 }, true));
   });
-  (recent || []).forEach(item => addTrack(item.track, RECENT_PLAY_SCORE, { recent: true }));
-  (saved || []).forEach(item => addTrack(item.track, SAVED_TRACK_SCORE, { liked: true }));
+  (recent || []).forEach(item => addTrack(item.track, RECENT_PLAY_SCORE, { recent: true }, true));
+  (saved || []).forEach(item => addTrack(item.track, SAVED_TRACK_SCORE, { liked: true }, true));
 
   tracksById.forEach((t, id) => {
     const s = trackScore.get(id);
@@ -200,13 +226,16 @@ export function mergeSignalsAndRank({
     });
   });
 
-  if (historySummary && Array.isArray(historySummary.artists)) {
+  const hasSpotifyApiItems = spotifyApiArtistIds.size > 0 || spotifyApiTrackIds.size > 0;
+  const filterHistoryOut = Boolean(spotifyApiOnly && hasSpotifyApiItems);
+
+  if (historySummary && Array.isArray(historySummary.artists) && !filterHistoryOut) {
     for (const hArtist of historySummary.artists) {
       const id = artistIdByNorm.get(hArtist.normName) || registerArtist({
         id: makeHistoryId('artist', hArtist.normName),
         name: hArtist.name,
         genres: []
-      });
+      }, false);
       if (!id) continue;
 
       addArtistScore(id, Math.max(1, hArtist.plays) * HISTORY_ARTIST_PLAY_SCORE);
@@ -232,7 +261,7 @@ export function mergeSignalsAndRank({
     }
   }
 
-  if (historySummary && Array.isArray(historySummary.tracks)) {
+  if (historySummary && Array.isArray(historySummary.tracks) && !filterHistoryOut) {
     for (const hTrack of historySummary.tracks) {
       const primaryArtistId = artistIdByNorm.get(hTrack.normArtist);
       if (!primaryArtistId) continue;
@@ -242,7 +271,13 @@ export function mergeSignalsAndRank({
 
       const featArtists = (hTrack.featArtistNames || [])
         .map(fn => {
-          const fId = artistIdByNorm.get(normalizeArtistKey(fn));
+          const normFeat = normalizeArtistKey(fn);
+          if (!normFeat) return null;
+          const fId = artistIdByNorm.get(normFeat) || registerArtist({
+            id: makeHistoryId('artist', normFeat),
+            name: fn,
+            genres: []
+          }, false);
           return fId ? artistsById.get(fId) : null;
         })
         .filter(Boolean);
@@ -278,7 +313,8 @@ export function mergeSignalsAndRank({
           external_urls: spotifyUrl ? { spotify: spotifyUrl } : undefined
         },
         Math.max(1, hTrack.plays) * HISTORY_TRACK_PLAY_SCORE,
-        { history: histMeta }
+        { history: histMeta },
+        false
       );
     }
   }
@@ -312,21 +348,23 @@ export function mergeSignalsAndRank({
     artistRanks,
     artistHistoryById,
     artistIdByNorm,
+    spotifyApiArtistIds,
+    spotifyApiTrackIds,
     includedArtists,
     topTracks,
     unknown,
     recent,
     saved,
-    historySummary,
+    historySummary: filterHistoryOut ? null : historySummary,
     connectedSpotify,
     sourcesDiag: {
       topArtists: topArtistsByRange.map(l => (l || []).length).join('/'),
       topTracks: topTracksByRange.map(l => (l || []).length).join('/'),
       recentlyPlayed: (recent || []).length,
       likedSongs: (saved || []).length,
-      historyPlays: historySummary?.validPlays || 0,
-      historyArtists: historySummary?.artists?.length || 0,
-      historyTracks: historySummary?.tracks?.length || 0
+      historyPlays: filterHistoryOut ? 0 : (historySummary?.validPlays || 0),
+      historyArtists: filterHistoryOut ? 0 : (historySummary?.artists?.length || 0),
+      historyTracks: filterHistoryOut ? 0 : (historySummary?.tracks?.length || 0)
     }
   };
 }
@@ -354,6 +392,8 @@ export function assembleUniverseFromSignals(
     artistRanks,
     artistHistoryById,
     artistIdByNorm,
+    spotifyApiArtistIds = new Set(),
+    spotifyApiTrackIds = new Set(),
     includedArtists,
     topTracks,
     unknown,
@@ -430,6 +470,7 @@ export function assembleUniverseFromSignals(
     const { clusterId, bridge } = assignment.get(a.id);
     const hist = artistHistoryById.get(a.id) || null;
     const isRealSpotifyId = /^[0-9A-Za-z]{22}$/.test(a.id);
+    const fromSpotifyApi = spotifyApiArtistIds.has(a.id) || Object.keys(artistRanks.get(a.id) || {}).length > 0;
     return {
       id: a.id,
       name: a.name,
@@ -440,6 +481,8 @@ export function assembleUniverseFromSignals(
       ...estimatedFeatures(a.id),
       ranks: artistRanks.get(a.id) || {},
       history: hist,
+      fromSpotifyApi,
+      historyOnly: Boolean(!fromSpotifyApi && hist),
       embed: positions.get(a.id),
       spotifyUrl: a.external_urls?.spotify || (isRealSpotifyId ? `https://open.spotify.com/artist/${a.id}` : `https://open.spotify.com/search/${encodeURIComponent(a.name)}`),
       imageUrl: a.images?.[0]?.url
@@ -451,21 +494,26 @@ export function assembleUniverseFromSignals(
   const tracks = topTracks
     .filter(t => includedIds.has(t.artists[0]?.id))
     .map(t => {
-      const feat = t.artists.slice(1).find(a => includedIds.has(a.id));
-      const src = trackSources.get(t.id) || { ranks: {}, liked: false, recentPlays: 0, history: null };
+      const featList = t.artists.slice(1).filter(a => includedIds.has(a.id) && a.id !== t.artists[0].id);
+      const featIds = [...new Set(featList.map(a => a.id))];
+      const src = trackSources.get(t.id) || { ranks: {}, liked: false, recentPlays: 0, history: null, fromSpotifyApi: false };
       const isRealTrackId = /^[0-9A-Za-z]{22}$/.test(t.id);
+      const fromSpotifyApi = Boolean(src.fromSpotifyApi || spotifyApiTrackIds.has(t.id) || Object.keys(src.ranks || {}).length || src.liked || src.recentPlays > 0);
       return {
         id: t.id,
         name: t.name,
         artistId: t.artists[0].id,
         artistName: t.artists[0].name,
-        featArtistId: feat ? feat.id : null,
+        featArtistId: featIds[0] || null,
+        featArtistIds: featIds,
         basePlays: Math.max(1, Math.round(trackScore.get(t.id))),
         ...estimatedFeatures(t.id),
         ranks: src.ranks,
         liked: src.liked,
         recentPlays: src.recentPlays,
         history: src.history,
+        fromSpotifyApi,
+        historyOnly: Boolean(!fromSpotifyApi && src.history),
         durationMs: t.duration_ms,
         spotifyUrl: t.external_urls?.spotify || (isRealTrackId ? `https://open.spotify.com/track/${t.id}` : `https://open.spotify.com/search/${encodeURIComponent(`${t.name} ${t.artists[0].name}`)}`),
         imageUrl: t.album?.images?.[0]?.url,

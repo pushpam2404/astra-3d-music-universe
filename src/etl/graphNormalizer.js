@@ -36,6 +36,8 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
       plays,
       logPlays,
       neighbors: new Set(),
+      collaboratorArtistIds: new Set(),
+      collabTrackIds: new Set(),
       connectedGenres: [],
       connectedArtists: []
     };
@@ -89,7 +91,7 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
   // Update nodeMap with normalized references
   normalizedNodes.forEach(n => nodeMap.set(n.id, n));
 
-  // 4. Build Edge Network (Artist-to-Genre, Track-to-Artist, Collab)
+  // 4. Build Edge Network (Artist-to-Genre, Track-to-Artist, and Multi-Artist Collaborations)
   const edges = [];
 
   normalizedNodes.forEach(node => {
@@ -122,9 +124,15 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
         artistNode.neighbors.add(node.id);
       }
 
-      // Feature collaboration edges if present
-      if (node.featArtistId && nodeMap.has(node.featArtistId)) {
-        const featArtist = nodeMap.get(node.featArtistId);
+      // Feature collaboration edges for all collaborating artists on the song
+      const featIds = Array.isArray(node.featArtistIds) && node.featArtistIds.length
+        ? node.featArtistIds
+        : (node.featArtistId ? [node.featArtistId] : []);
+
+      const involvedArtists = [artistNode].filter(Boolean);
+      featIds.forEach(fId => {
+        const featArtist = nodeMap.get(fId);
+        if (!featArtist || featArtist.id === node.artistId) return;
         edges.push({
           id: `edge_collab_${node.id}_${featArtist.id}`,
           source: node,
@@ -134,6 +142,22 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
         });
         node.neighbors.add(featArtist.id);
         featArtist.neighbors.add(node.id);
+        involvedArtists.push(featArtist);
+        if (!node.connectedArtists.includes(featArtist.name)) {
+          node.connectedArtists.push(featArtist.name);
+        }
+      });
+
+      // Record mutual collaborator links on all artists involved in this shared song
+      if (involvedArtists.length > 1) {
+        for (let i = 0; i < involvedArtists.length; i++) {
+          involvedArtists[i].collabTrackIds.add(node.id);
+          for (let j = 0; j < involvedArtists.length; j++) {
+            if (i !== j) {
+              involvedArtists[i].collaboratorArtistIds.add(involvedArtists[j].id);
+            }
+          }
+        }
       }
     }
   });

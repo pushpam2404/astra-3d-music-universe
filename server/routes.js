@@ -90,8 +90,9 @@ async function universeHandler(req, res) {
   const session = getSession(req);
   const knownMeta = req.body && typeof req.body.knownMeta === 'object' ? req.body.knownMeta : {};
   const signalsOnly = Boolean(req.body?.signalsOnly || req.query?.signalsOnly);
-  const clientHistory = req.body?.historySummary?.isAstraHistorySummary ? req.body.historySummary : null;
-  const useLocal = req.body?.useLocalHistory !== false && !signalsOnly;
+  const spotifyApiOnly = Boolean(req.body?.spotifyApiOnly || req.query?.spotifyApiOnly);
+  const clientHistory = !spotifyApiOnly && req.body?.historySummary?.isAstraHistorySummary ? req.body.historySummary : null;
+  const useLocal = !spotifyApiOnly && req.body?.useLocalHistory !== false && !signalsOnly;
   const historySummary = clientHistory || (useLocal ? getLocalHistorySummary() : null);
 
   if (!session && !historySummary) {
@@ -100,7 +101,7 @@ async function universeHandler(req, res) {
 
   try {
     const api = session ? createApi(session, (s) => saveSession(req, res, s)) : null;
-    const result = await buildUniverseDataset(api, { knownMeta, historySummary, signalsOnly });
+    const result = await buildUniverseDataset(api, { knownMeta, historySummary, signalsOnly, spotifyApiOnly });
     if (!signalsOnly) {
       console.log('[universe]', JSON.stringify(result.diagnostics));
     }
