@@ -367,21 +367,21 @@ async function initApp() {
 
   function updateUniverseCaption(dataset) {
     const hm = dataset.historyMeta;
-    const visibleArtists = AppState.nodes.filter(n => n.type === 'artist' && n.meshGroup?.visible !== false).length;
-    const visibleTracks = AppState.nodes.filter(n => n.type === 'track' && n.meshGroup?.visible !== false).length;
-    const visibleClusters = AppState.nodes.filter(n => n.type === 'genre' && n.meshGroup?.visible !== false).length;
+    const totalArtists = dataset.artists?.length || AppState.rawDataset?.artists?.length || hm?.artistCount || AppState.nodes.filter(n => n.type === 'artist').length;
+    const totalTracks = dataset.tracks?.length || AppState.rawDataset?.tracks?.length || hm?.trackCount || AppState.nodes.filter(n => n.type === 'track').length;
+    const totalClusters = dataset.genres?.length || AppState.rawDataset?.genres?.length || AppState.nodes.filter(n => n.type === 'genre').length;
 
     if (hm?.validPlays && !AppState.spotifyApiOnly && AppState.layers.historySongs !== false) {
       const years = Object.keys(hm.years || {}).sort();
       const span = years.length ? `${years[0]}–${years[years.length - 1]}` : '';
       hud.setCaption(
-        dataset.name || 'Your music universe',
-        `${plural(visibleArtists, 'artist')} & ${plural(visibleTracks, 'song')} in ${plural(visibleClusters, 'cluster')} · ${hm.validPlays.toLocaleString()} plays (${hm.totalHours?.toLocaleString() || '—'} hrs${span ? `, ${span}` : ''})`
+        dataset.name || 'Your Complete Music Universe',
+        `${plural(totalArtists, 'artist')} & ${plural(totalTracks, 'song')} in ${plural(totalClusters, 'cluster')} · ${hm.validPlays.toLocaleString()} plays (${hm.totalHours?.toLocaleString() || '—'} hrs${span ? `, ${span}` : ''})`
       );
     } else {
       hud.setCaption(
-        'Your music universe',
-        `${plural(visibleArtists, 'artist')} and ${plural(visibleTracks, 'song')} in ${plural(visibleClusters, 'cluster')}`
+        dataset.name || 'Your music universe',
+        `${plural(totalArtists, 'artist')} & ${plural(totalTracks, 'song')} in ${plural(totalClusters, 'cluster')}`
       );
     }
   }
@@ -617,7 +617,7 @@ async function initApp() {
   }
   requestAnimationFrame(animate);
 
-  if (storedSnapshot?.dataset && !authStatus.loggedIn) {
+  if (storedSnapshot?.dataset && !authStatus.loggedIn && !authStatus.localHistory?.available) {
     AppState.isDemo = false;
     loadDataset(storedSnapshot.dataset);
     updateUniverseCaption(storedSnapshot.dataset);

@@ -415,42 +415,159 @@ export function clusterArtists(artists, collabs, together = new Map()) {
   }
 
   // Orphans join the cluster they resemble most (musical similarity), else wait for co-listening.
+  // 1. Direct TF-IDF Musical Neighbors (pass 1)
   const uncharted = [];
   const finalLabel = Int32Array.from(label);
   label.forEach((c, i) => {
     if (c >= 0) return;
     const score = new Map();
     musicalNeighbors[i].forEach(({ j, w }) => { if (label[j] >= 0) score.set(label[j], (score.get(label[j]) || 0) + w); });
-    let best = -1, bestScore = 0.02;
+    let best = -1, bestScore = 0.015;
     score.forEach((s, d) => { if (s > bestScore) { bestScore = s; best = d; } });
     if (best >= 0) finalLabel[i] = best;
-    else uncharted.push(artists[i].id);
   });
 
-  // Genre-less artists you play alongside placed ones join those artists' cluster.
-  for (let pass = 0; pass < 4; pass++) {
+  // 2. Track Collaborations: artists who shared a track with a placed artist join that artist's cluster
+  collabs.forEach((w, k) => {
+    const [x, y] = k.split('|').map(id => byId.get(id));
+    if (!x || !y) return;
+    [[x, y], [y, x]].forEach(([p, q]) => {
+      if (finalLabel[p.index] < 0 && finalLabel[q.index] >= 0) {
+        finalLabel[p.index] = finalLabel[q.index];
+      }
+    });
+  });
+
+  // 3. Cluster Genre Family Centroids:
+  // Compute normalized genre-family distribution for each formed cluster.
+  const clusterFamProfiles = new Map();
+  finalLabel.forEach((c, i) => {
+    if (c < 0) return;
+    if (!clusterFamProfiles.has(c)) clusterFamProfiles.set(c, new Map());
+    const prof = clusterFamProfiles.get(c);
+    const fams = artists[i].families || {};
+    Object.entries(fams).forEach(([f, weight]) => {
+      prof.set(f, (prof.get(f) || 0) + weight);
+    });
+  });
+
+  const clusterFamVecs = new Map();
+  clusterFamProfiles.forEach((prof, c) => {
+    let normSq = 0;
+    prof.forEach(val => { normSq += val * val; });
+    const norm = Math.sqrt(normSq) || 1;
+    const normMap = new Map();
+    prof.forEach((val, f) => normMap.set(f, val / norm));
+    clusterFamVecs.set(c, normMap);
+  });
+
+  // Match orphan artists with genres or country tags to the best fitting cluster
+  finalLabel.forEach((c, i) => {
+    if (c >= 0) return;
+    const a = artists[i];
+    const fams = a.families || {};
+    if (Object.keys(fams).length === 0) return;
+    let aNormSq = 0;
+    Object.values(fams).forEach(v => { aNormSq += v * v; });
+    const aNorm = Math.sqrt(aNormSq) || 1;
+
+    let bestCluster = -1;
+    let bestSim = 0.12;
+
+    clusterFamVecs.forEach((vec, clId) => {
+      let dot = 0;
+      Object.entries(fams).forEach(([f, v]) => {
+        if (vec.has(f)) dot += (v / aNorm) * vec.get(f);
+      });
+      if (dot > bestSim) {
+        bestSim = dot;
+        bestCluster = clId;
+      }
+    });
+
+    if (bestCluster >= 0) {
+      finalLabel[i] = bestCluster;
+    }
+  });
+
+  // 4. Co-listening sessions: artists played alongside placed ones join their cluster (multi-hop propagation)
+  for (let pass = 0; pass < 8; pass++) {
     const togetherScore = new Map();
     together.forEach((t, k) => {
       const [x, y] = k.split('|').map(id => byId.get(id));
       if (!x || !y) return;
       [[x, y], [y, x]].forEach(([p, q]) => {
-        if (p.genres.length || finalLabel[q.index] < 0) return;
-        if (pass === 0 && !q.genres.length) return;
+        if (finalLabel[p.index] >= 0 || finalLabel[q.index] < 0) return;
         if (!togetherScore.has(p.index)) togetherScore.set(p.index, new Map());
         const m = togetherScore.get(p.index);
         m.set(finalLabel[q.index], (m.get(finalLabel[q.index]) || 0) + t);
       });
     });
-    const minWeight = pass === 0 ? TOGETHER_REASSIGN : 0.2;
+    const minWeight = pass === 0 ? 0.15 : (pass === 1 ? 0.05 : 0.005);
+    let newlyPlaced = 0;
     togetherScore.forEach((m, i) => {
-      if (finalLabel[i] >= 0 && pass > 0) return;
-      const [best, t] = [...m].sort((x, y) => y[1] - x[1])[0];
-      if (t >= minWeight) finalLabel[i] = best;
+      if (finalLabel[i] >= 0) return;
+      const sorted = [...m].sort((x, y) => y[1] - x[1]);
+      if (sorted.length && sorted[0][1] >= minWeight) {
+        finalLabel[i] = sorted[0][0];
+        newlyPlaced++;
+      }
+    });
+    if (newlyPlaced === 0) break;
+  }
+
+  // 5. Audio Feature Centroid Proximity:
+  // For any remaining orphan with features (energy, valence, dance, acoustic),
+  // place them into the cluster with the closest acoustic/energy profile
+  const clusterAudioCentroids = new Map();
+  finalLabel.forEach((c, i) => {
+    if (c < 0) return;
+    if (!clusterAudioCentroids.has(c)) clusterAudioCentroids.set(c, { energy: 0, valence: 0, dance: 0, acoustic: 0, count: 0 });
+    const cent = clusterAudioCentroids.get(c);
+    const a = artists[i];
+    cent.energy += a.energy || 0.5;
+    cent.valence += a.valence || 0.5;
+    cent.dance += a.dance || 0.5;
+    cent.acoustic += a.acoustic || 0.2;
+    cent.count++;
+  });
+
+  clusterAudioCentroids.forEach(cent => {
+    if (cent.count > 0) {
+      cent.energy /= cent.count;
+      cent.valence /= cent.count;
+      cent.dance /= cent.count;
+      cent.acoustic /= cent.count;
+    }
+  });
+
+  if (clusterAudioCentroids.size > 0) {
+    finalLabel.forEach((c, i) => {
+      if (c >= 0) return;
+      const a = artists[i];
+      let bestCl = -1;
+      let minD = Infinity;
+      clusterAudioCentroids.forEach((cent, clId) => {
+        const dE = (a.energy || 0.5) - cent.energy;
+        const dV = (a.valence || 0.5) - cent.valence;
+        const dD = (a.dance || 0.5) - cent.dance;
+        const dA = (a.acoustic || 0.2) - cent.acoustic;
+        const dist = Math.hypot(dE, dV, dD, dA);
+        if (dist < minD) {
+          minD = dist;
+          bestCl = clId;
+        }
+      });
+      if (bestCl >= 0) {
+        finalLabel[i] = bestCl;
+      }
     });
   }
-  const stillUncharted = uncharted.filter(id => finalLabel[byId.get(id).index] < 0);
-  uncharted.length = 0;
-  uncharted.push(...stillUncharted);
+
+  // 6. Any artist truly remaining without a cluster stays in uncharted
+  finalLabel.forEach((c, i) => {
+    if (c < 0) uncharted.push(artists[i].id);
+  });
 
   const groups = new Map();
   finalLabel.forEach((c, i) => {

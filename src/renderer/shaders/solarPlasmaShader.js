@@ -87,32 +87,34 @@ export const SolarPlasmaFragmentShader = /* glsl */ `
   varying float vNoise;
 
   void main() {
-    float camDist = length(vPosition);
-    vec2 ndc = vClipPos.xy / max(0.001, vClipPos.w);
-    if (uOpacity < 0.55 && camDist < 28.0 && length(ndc) < 0.38) {
-      discard;
-    }
 
     vec3 normal = normalize(vNormal);
     vec3 viewDir = normalize(-vPosition);
     float ndotv = max(0.0, dot(normal, viewDir));
 
-    // Solid, non-glowing central cluster planet with subtle atmospheric bands
+    // Glowing central cluster Sun / Core: radiant stellar plasma with incandescent core
     vec3 keyLight = normalize(vec3(0.42, 0.72, 0.55));
-    float diff = smoothstep(-0.18, 0.95, dot(normal, keyLight));
+    float diff = smoothstep(-0.25, 0.85, dot(normal, keyLight));
     vec3 halfVec = normalize(keyLight + viewDir);
-    float spec = pow(max(0.0, dot(normal, halfVec)), 30.0);
+    float spec = pow(max(0.0, dot(normal, halfVec)), 28.0);
 
-    float bands = sin(vLocal.y * 9.0 + vNoise * 1.4);
-    vec3 surface = uPrimaryColor * (0.94 + 0.06 * bands + 0.04 * vNoise);
-    float limb = 0.62 + 0.38 * pow(ndotv, 0.52);
+    float bands = sin(vLocal.y * 7.5 + vNoise * 1.8);
+    vec3 surface = uPrimaryColor * (0.92 + 0.08 * bands + 0.08 * vNoise);
 
-    vec3 planetColor = surface * (0.50 + 0.54 * diff) * limb
-                     + mix(uPrimaryColor, vec3(1.0), 0.45) * spec * 0.18;
+    // Radiant core emission: inner incandescent stellar brightness
+    float coreLuminance = pow(ndotv, 1.35);
+    vec3 incandescent = mix(uPrimaryColor, uCoreColor, coreLuminance * 0.62 + 0.12 * vNoise);
 
-    // Dim cleanly when unselected without turning translucent or glowing
-    if (uOpacity < 0.65) {
-      planetColor *= mix(0.28, 0.85, clamp(uOpacity, 0.0, 1.0));
+    // Energetic solar limb flare
+    float rim = pow(1.0 - ndotv, 2.2);
+    vec3 sunColor = surface * (0.65 + 0.40 * diff)
+                  + incandescent * (0.45 + 0.45 * coreLuminance)
+                  + uPrimaryColor * rim * 0.48
+                  + mix(uPrimaryColor, vec3(1.0), 0.6) * spec * 0.25;
+
+    // Ambient visibility in lens / dimmed modes (never turns pitch black)
+    if (uOpacity < 0.85) {
+      sunColor *= mix(0.55, 0.95, clamp(uOpacity, 0.0, 1.0));
     }
 
     // Crisp black border around the silhouette (strongest on light-colored clusters so they stand out clearly)
@@ -122,12 +124,12 @@ export const SolarPlasmaFragmentShader = /* glsl */ `
 
     float radial = sqrt(max(0.0, 1.0 - ndotv * ndotv));
     float px = max(0.012, fwidth(radial));
-    float borderWidth = mix(0.045, 0.095, isLight) + px * 1.3;
+    float borderWidth = mix(0.040, 0.085, isLight) + px * 1.2;
     float borderMask = smoothstep(1.0 - borderWidth - px * 0.85, 1.0 - borderWidth + px * 0.35, radial);
-    vec3 borderColor = vec3(0.015, 0.018, 0.03);
-    planetColor = mix(planetColor, borderColor, borderMask * mix(0.68, 0.96, isLight));
+    vec3 borderColor = vec3(0.012, 0.014, 0.024);
+    sunColor = mix(sunColor, borderColor, borderMask * mix(0.65, 0.94, isLight));
 
-    gl_FragColor = vec4(planetColor, 1.0);
+    gl_FragColor = vec4(sunColor, 1.0);
   }
 `;
 

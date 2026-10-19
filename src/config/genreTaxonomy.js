@@ -7,13 +7,6 @@
  * Imported by both the backend and browser, so it must stay free of browser APIs.
  */
 
-export const CLUSTER_COLORS = [
-  "#E1627F","#E1A6A2","#FE8169","#DA7306","#FFC48C","#C8A83A",
-  "#E3D543","#999562","#6CA52E","#B9DDB1","#7CD06A","#00AB89",
-  "#0AF2CD","#78BAAC","#47C7F8","#0D9AEC","#ADD6FD","#9EA4E9",
-  "#8184F1","#B870D3","#F69EFE","#EFC0E3","#B082A0","#EF7EC3",
-];
-
 function srgbToLinear(c) {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
@@ -92,50 +85,22 @@ export function oklchToHex(L, C, H) {
 }
 
 /**
- * Precomputes the greedy farthest-point ordering of `CLUSTER_COLORS` in OKLab space
- * so the largest clusters receive maximally distant colors first and hue-sorted
- * neighbours in `CLUSTER_COLORS` are never handed out consecutively.
- */
-function buildFarthestPointPalette(hexList) {
-  const pool = hexList.map(hex => ({ hex, lab: hexToOklab(hex) }));
-  const ordered = [pool.shift()];
-  while (pool.length > 0) {
-    let bestIdx = 0;
-    let bestMinDist = -1;
-    for (let i = 0; i < pool.length; i++) {
-      let minDist = Infinity;
-      for (let j = 0; j < ordered.length; j++) {
-        const d = oklabDist(pool[i].lab, ordered[j].lab);
-        if (d < minDist) minDist = d;
-      }
-      if (minDist > bestMinDist) {
-        bestMinDist = minDist;
-        bestIdx = i;
-      }
-    }
-    ordered.push(pool.splice(bestIdx, 1)[0]);
-  }
-  return ordered.map(item => item.hex);
-}
-
-export const ORDERED_CLUSTER_COLORS = buildFarthestPointPalette(CLUSTER_COLORS);
-
-/**
- * Returns a unique color for cluster `index` (ordered by cluster size).
- *  - For index 0..23: returns the greedy farthest-point ordered color from `CLUSTER_COLORS`.
- *  - For index >= 24: generates additional distinct colors at a 137.5° golden-angle hue step
- *    in OKLCH without wrapping around with `%`.
+ * Returns a maximally-distant unique color for cluster `index` (ordered by cluster size)
+ * using the golden-angle (137.507764°) sequence in OKLCH color space.
+ *
+ * Every successive cluster lands in the widest unvisited hue gap on the 360° circle,
+ * ensuring adjacent or related genres (e.g. EDM vs Future Bass, Filmi vs Indian Pop)
+ * never collide or look similar.
  */
 export function getDistinctClusterColor(index) {
-  if (index < ORDERED_CLUSTER_COLORS.length) {
-    return ORDERED_CLUSTER_COLORS[index];
-  }
-  const overflowIdx = index - ORDERED_CLUSTER_COLORS.length;
-  const hue = (overflowIdx * 137.5 + 19.0) % 360;
-  const lightness = 0.74 + ((overflowIdx % 3) - 1) * 0.065;
-  const chroma = 0.145 - (overflowIdx % 2) * 0.022;
+  const hue = (index * 137.507764 + 22.0) % 360;
+  const lightness = 0.72 + ((index % 3) - 1) * 0.035;
+  const chroma = 0.165 - (index % 2) * 0.015;
   return oklchToHex(lightness, chroma, hue);
 }
+
+export const ORDERED_CLUSTER_COLORS = Array.from({ length: 24 }, (_, i) => getDistinctClusterColor(i));
+export const CLUSTER_COLORS = ORDERED_CLUSTER_COLORS;
 
 export const GENRE_FAMILIES = {
   hiphop:     { label: 'Hip-Hop & Rap',      color: ORDERED_CLUSTER_COLORS[0],  keywords: ['hip hop', 'rap', 'trap', 'drill', 'grime', 'boom bap', 'gangsta', 'horrorcore', 'crunk', 'phonk', 'emo rap'] },

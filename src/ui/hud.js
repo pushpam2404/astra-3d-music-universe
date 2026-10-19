@@ -8,6 +8,14 @@
 import { SPOTIFY_LOGIN_URL, logout } from '../api/backendClient.js';
 import { nodeMatchesLens } from '../renderer/celestialFactory.js';
 import { itemMetaLabel } from './detailPanel.js';
+import {
+  springIn,
+  animateDialogIn,
+  animateDialogOut,
+  transitionViews,
+  staggerRevealItems,
+  attachPressFeedback
+} from './motionFx.js';
 
 const KIND_LABEL = { genre: 'Cluster', artist: 'Artist', track: 'Song' };
 const KIND_ORDER = { genre: 0, artist: 1, track: 2 };
@@ -48,13 +56,15 @@ export function updateEnrichmentStatus({ waitingCount = 0, readyOnReloadCount = 
   statusEl.hidden = false;
   if (waitingCount > 0) {
     statusEl.innerHTML = `
+      <span class="status-pulse-dot" aria-hidden="true"></span>
       <span><strong>${waitingCount.toLocaleString()}</strong> artists waiting for info · 
-      <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists ready if you reload</span>
+      <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists ready on reload</span>
       ${readyOnReloadCount > 0 ? '<button type="button" class="pill-action" data-enrich-reload>Apply now</button>' : ''}
     `;
   } else {
     statusEl.innerHTML = `
-      <span>All artists checked · <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists will be placed into clusters on reload</span>
+      <span class="status-pulse-dot is-ready" aria-hidden="true"></span>
+      <span>All artists checked · <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists ready</span>
       <button type="button" class="pill-action" data-enrich-reload>Reload to apply</button>
     `;
   }
@@ -84,6 +94,9 @@ export class Hud {
     this.initHistoryDialog();
     this.initSpotifyButton();
     $('reset-camera-btn').addEventListener('click', () => this.cb.onResetCamera());
+    setTimeout(() => {
+      attachPressFeedback('.btn, .lens-pill, .panel-tab, .mini-pill, .sub-tab, .cam-ctrl-btn, .pill-action');
+    }, 150);
   }
 
   /* ---------- Mobile Camera Quick Controls ---------- */
@@ -166,8 +179,21 @@ export class Hud {
         return li;
       }) : [Object.assign(document.createElement('li'), { textContent: 'Nothing by that name or era in your universe' })]));
       list.hidden = false;
+      springIn(list, { y: 6, scale: 0.98, visualDuration: 0.25 });
       active = results.length ? 0 : -1;
       highlight();
+    });
+
+    // Global keyboard shortcuts: ⌘K, Ctrl+K, or "/" to focus search
+    window.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        input.focus();
+        input.select();
+      } else if (e.key === '/' && document.activeElement !== input && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+        e.preventDefault();
+        input.focus();
+      }
     });
 
     input.addEventListener('keydown', (e) => {
@@ -235,7 +261,12 @@ export class Hud {
     const btn = $('view-toggle-btn');
     const panel = $('view-panel');
     const setOpen = (open) => {
-      panel.hidden = !open;
+      if (open) {
+        panel.hidden = false;
+        springIn(panel, { y: 8, scale: 0.95, visualDuration: 0.32 });
+      } else {
+        panel.hidden = true;
+      }
       btn.setAttribute('aria-expanded', String(open));
     };
     btn.addEventListener('click', () => setOpen(panel.hidden));
@@ -436,15 +467,13 @@ export class Hud {
 
   showClusters() {
     document.body.classList.remove('showing-details');
-    $('detail-view').hidden = true;
-    $('cluster-view').hidden = false;
+    transitionViews($('detail-view'), $('cluster-view'), 'backward');
   }
 
   showDetails() {
-    $('cluster-view').hidden = true;
-    $('detail-view').hidden = false;
-    $('detail-view').scrollTop = 0;
     document.body.classList.add('showing-details');
+    $('detail-view').scrollTop = 0;
+    transitionViews($('cluster-view'), $('detail-view'), 'forward');
     if (this.isPhone()) this.setSheet(true);
   }
 
@@ -498,6 +527,7 @@ export class Hud {
         return li;
       }));
 
+    staggerRevealItems(list, 'li', { limit: 25, staggerDelay: 0.015 });
     this.renderMemoriesView();
     this.renderSongsBrowser();
   }
@@ -620,6 +650,7 @@ export class Hud {
     ].filter(Boolean);
 
     container.replaceChildren(...groups);
+    staggerRevealItems(container, '.memory-group', { limit: 8, staggerDelay: 0.03 });
   }
 
   /**
@@ -675,6 +706,7 @@ export class Hud {
     });
 
     container.replaceChildren(countNote, ul);
+    staggerRevealItems(ul, 'li', { limit: 30, staggerDelay: 0.015 });
   }
 
   /* ---------- History Import, Source Mode & Export Dialog ---------- */
@@ -695,14 +727,20 @@ export class Hud {
     const spotifyOnlyBtn = $('mode-spotify-only-btn');
     const removeHistoryBtn = $('remove-history-btn');
 
+    const closeDialog = async () => {
+      await animateDialogOut(dialog);
+      dialog.close();
+    };
+
     openBtn.addEventListener('click', () => {
       this.updateHistoryDialogStatus();
       this.syncHistoryToggleUI();
       dialog.showModal();
+      animateDialogIn(dialog);
     });
-    closeBtn.addEventListener('click', () => dialog.close());
+    closeBtn.addEventListener('click', closeDialog);
     dialog.addEventListener('click', (e) => {
-      if (e.target === dialog) dialog.close();
+      if (e.target === dialog) closeDialog();
     });
 
     mergedBtn?.addEventListener('click', () => {
@@ -710,17 +748,17 @@ export class Hud {
       this.syncHistoryToggleUI();
       this.updateHistoryDialogStatus();
     });
-    spotifyOnlyBtn?.addEventListener('click', () => {
+    spotifyOnlyBtn?.addEventListener('click', async () => {
       this.cb.onToggleHistorySongs?.(false);
       this.syncHistoryToggleUI();
       this.updateHistoryDialogStatus();
-      dialog.close();
+      await closeDialog();
     });
     removeHistoryBtn?.addEventListener('click', async () => {
       await this.cb.onRemoveHistory?.();
       this.syncHistoryToggleUI();
       this.updateHistoryDialogStatus();
-      dialog.close();
+      await closeDialog();
     });
 
     folderBtn.addEventListener('click', () => folderInput.click());

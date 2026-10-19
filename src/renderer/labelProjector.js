@@ -172,15 +172,16 @@ export class LabelProjector {
     }
 
     if (hasLens) {
-      if (node.type === 'genre') return (node.focusTarget ?? 1) >= 0.5 ? 2.5 : -1;
+      if (node.type === 'genre') return 1.2;
       if (!matchesLens) return -1;
       if (node.type === 'artist') {
-        if ((node.globalRank ?? 999) < 40 || (node.normScore ?? 0) > 0.45) return 1;
-        return 2;
+        if ((node.globalRank ?? 999) < 40 || (node.normScore ?? 0) > 0.45) return 1.6;
+        return 2.2;
       }
+      // Track satellites revolve rapidly; only label them in lens mode when explicitly hovered or selected
       if (node.type === 'track') {
-        if ((node.normScore ?? 0) > 0.42 || (node.history?.plays ?? 0) >= 20) return 1.5;
-        if ((node.history?.plays ?? 0) >= 8) return 3;
+        if (hoveredNode && node.id === hoveredNode.id) return 0.2;
+        return -1;
       }
       return -1;
     }
@@ -230,7 +231,21 @@ export class LabelProjector {
       });
     }
 
-    candidates.sort((a, b) => a.priority - b.priority || a.depth - b.depth);
+    // Deterministic priority ordering with hysteresis:
+    // 1. Hovered / focused items win immediately
+    // 2. Previously placed incumbent labels get a stability bonus to stop flicker
+    // 3. Canonical importance (plays/score), then unique ID (NEVER camera depth!)
+    candidates.sort((a, b) => {
+      if (Math.abs(a.priority - b.priority) > 0.01) return a.priority - b.priority;
+      const aShown = this.shown.has(a.el) ? 1 : 0;
+      const bShown = this.shown.has(b.el) ? 1 : 0;
+      if (aShown !== bShown) return bShown - aShown;
+      const aScore = (a.node.history?.plays ?? 0) || ((a.node.normScore ?? 0) * 100);
+      const bScore = (b.node.history?.plays ?? 0) || ((b.node.normScore ?? 0) * 100);
+      if (bScore !== aScore) return bScore - aScore;
+      return String(a.node.id).localeCompare(String(b.node.id));
+    });
+
     this.placed.length = 0;
     const shownNow = new Set();
 
@@ -259,28 +274,21 @@ export class LabelProjector {
         c.node._measuredPrimary = isPrimaryArtist;
       }
       const { w: lw, h: lh } = c.node.labelSize;
-      const spots = [[0, 0], [0, lh + 16], [lw / 2 + 14, lh / 2 + 8], [-(lw / 2 + 14), lh / 2 + 8]];
-      let placedAt = null;
-      for (const [dx, dy] of spots) {
-        const x = c.x + dx;
-        const y = c.y + dy;
-        const rect = { x0: x - lw / 2 - LABEL_PADDING, x1: x + lw / 2 + LABEL_PADDING, y0: y - lh - LABEL_PADDING, y1: y + LABEL_PADDING };
-        const blocked = c.priority > 0 && this.placed.some(r => rect.x0 < r.x1 && rect.x1 > r.x0 && rect.y0 < r.y1 && rect.y1 > r.y0);
-        if (!blocked) {
-          placedAt = { x, y, rect };
-          break;
-        }
-      }
-      if (!placedAt) continue;
-      this.placed.push(placedAt.rect);
-      c.x = placedAt.x;
-      c.y = placedAt.y;
+      
+      // Fixed physical anchor: rigidly anchored right over the node without hopping across 4 offsets
+      const x = c.x;
+      const y = c.y;
+      const rect = { x0: x - lw / 2 - LABEL_PADDING, x1: x + lw / 2 + LABEL_PADDING, y0: y - lh - LABEL_PADDING, y1: y + LABEL_PADDING };
+      const blocked = c.priority > 0 && this.placed.some(r => rect.x0 < r.x1 && rect.x1 > r.x0 && rect.y0 < r.y1 && rect.y1 > r.y0);
+      if (blocked) continue;
+
+      this.placed.push(rect);
 
       const focused = (activeNode && c.priority <= 2.5) || (hoveredNode && c.priority <= 0.8);
-      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.94'));
+      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.96' : '0.94'));
       this.show(
         c.el,
-        `translate(-50%, -100%) translate3d(${c.x.toFixed(0)}px, ${c.y.toFixed(0)}px, 0)`,
+        `translate(-50%, -100%) translate3d(${x.toFixed(0)}px, ${y.toFixed(0)}px, 0)`,
         opacity,
         c.priority === 0,
         isPrimaryArtist,

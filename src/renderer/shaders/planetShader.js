@@ -51,16 +51,6 @@ export function createPlanetMaterial() {
         float role = floor(vInfo.z + 0.001);
         float seed = fract(vInfo.z) * 12.566;
 
-        float camDist = length(vViewPosition);
-        vec2 ndc = vClipPos.xy / max(0.001, vClipPos.w);
-        float centerDist = length(ndc);
-
-        // If an unselected/dimmed planet revolves directly in front of the camera lens,
-        // step it out of the way so it never blocks the focused artist behind it.
-        if (focus < 0.65 && camDist < 28.0 && centerDist < 0.38) {
-          discard;
-        }
-
         vec3 normal = normalize(vNormal);
         vec3 viewDir = normalize(vViewPosition);
         float ndotv = max(0.0, dot(normal, viewDir));
@@ -83,13 +73,13 @@ export function createPlanetMaterial() {
         vec3 color = solidColor;
 
         if (role > 0.5 && role < 1.5) {
-          // Role 1: Selected artist or Lens-matched artist — bright, saturated, solid 3D sphere
+          // Role 1: Selected / primary artist — bright, saturated, radiant solid 3D sphere with incandescent shine
           color = surface * (0.58 + 0.54 * diff) * (0.68 + 0.32 * pow(ndotv, 0.5))
                 + mix(vColor, vec3(1.0, 0.98, 0.92), 0.5) * spec * 0.28;
         } else if (role >= 1.5) {
-          // Role 2: Collaborator / connected artist — vivid solid 3D sphere
-          color = surface * (0.54 + 0.52 * diff) * (0.65 + 0.35 * pow(ndotv, 0.5))
-                + mix(vColor, vec3(1.0), 0.45) * spec * 0.24;
+          // Role 2: Collaborator / connected artist — gentle, noticeably fainter luminescence so primary star clearly leads
+          color = surface * (0.36 + 0.34 * diff) * (0.54 + 0.26 * pow(ndotv, 0.65))
+                + mix(vColor, vec3(1.0), 0.25) * spec * 0.10;
         } else if (focus < 0.65) {
           // Unselected background planet: solid dark-matte sphere so foreground planets pop out against it
           color = surface * (0.20 + 0.28 * diff) * limb * 0.42;
@@ -159,11 +149,7 @@ export function createMoonCrystalMaterial() {
           discard;
         }
 
-        float camDist = length(vViewPosition);
-        vec2 ndc = vClipPos.xy / max(0.001, vClipPos.w);
-        if (focus < 0.65 && camDist < 24.0 && length(ndc) < 0.35) {
-          discard;
-        }
+
 
         vec3 fdx = dFdx(vViewPosition);
         vec3 fdy = dFdy(vViewPosition);

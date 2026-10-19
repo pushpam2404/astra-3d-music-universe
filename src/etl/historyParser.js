@@ -461,11 +461,40 @@ export function parseStreamingEvents(rawEvents) {
     })
     .sort((x, y) => (y.fullPlays - x.fullPlays) || (y.minutes - x.minutes));
 
-  // Keep co-listening pairs down to weight 0.25 so single-play artists link to their session neighbours
-  const togetherPairs = [...togetherCounts.entries()]
-    .filter(([, w]) => w >= 0.25)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 35000)
+  // Guarantee every artist has their top session co-listening bridges preserved
+  // so less-frequent and single-play artists remain connected to their music session
+  const artistBestPairs = new Map();
+  for (const [k, w] of togetherCounts) {
+    const [a, b] = k.split('|');
+    if (!artistBestPairs.has(a)) artistBestPairs.set(a, []);
+    if (!artistBestPairs.has(b)) artistBestPairs.set(b, []);
+    artistBestPairs.get(a).push([k, w]);
+    artistBestPairs.get(b).push([k, w]);
+  }
+
+  const guaranteedKeys = new Set();
+  artistBestPairs.forEach((pairs) => {
+    pairs.sort((x, y) => y[1] - x[1]);
+    for (let i = 0; i < Math.min(4, pairs.length); i++) {
+      guaranteedKeys.add(pairs[i][0]);
+    }
+  });
+
+  const sortedPairs = [...togetherCounts.entries()]
+    .filter(([, w]) => w >= 0.15)
+    .sort((a, b) => b[1] - a[1]);
+
+  const finalPairsMap = new Map();
+  guaranteedKeys.forEach(k => {
+    const w = togetherCounts.get(k);
+    if (w) finalPairsMap.set(k, w);
+  });
+  for (const [k, w] of sortedPairs) {
+    if (finalPairsMap.size >= 65000) break;
+    finalPairsMap.set(k, w);
+  }
+
+  const togetherPairs = [...finalPairsMap.entries()]
     .map(([k, w]) => [k, Number(w.toFixed(2))]);
 
   return {

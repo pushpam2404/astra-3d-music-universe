@@ -17,20 +17,40 @@
 
   <header id="top-bar">
     <div class="brand">
-      <span class="brand-name">Astra</span>
-      <span class="brand-tagline">your music, mapped</span>
+      <div class="brand-crest" aria-hidden="true">
+        <span class="crest-orbit"></span>
+        <span class="crest-core"></span>
+      </div>
+      <div class="brand-text">
+        <span class="brand-name">Astra</span>
+        <span class="brand-tagline">your music, mapped</span>
+      </div>
     </div>
 
     <div class="search" role="search">
+      <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
       <input type="search" id="search-input" placeholder="Find an artist, song, cluster or era (e.g. 2024, dormant)" autocomplete="off" aria-label="Search your universe">
+      <kbd class="search-shortcut" title="Press ⌘K or / to search">⌘K</kbd>
       <ul id="search-results" role="listbox" hidden></ul>
     </div>
 
     <div class="top-actions">
-      <button id="history-btn" class="btn btn-history" type="button" title="Import, export or toggle listening history">History</button>
-      <button id="view-toggle-btn" class="btn btn-quiet" type="button" aria-expanded="false" aria-controls="view-panel">View</button>
-      <button id="reset-camera-btn" class="btn btn-quiet" type="button">Show everything</button>
-      <button id="spotify-btn" class="btn btn-spotify" type="button">Connect Spotify</button>
+      <button id="history-btn" class="btn btn-history" type="button" title="Import, export or toggle listening history">
+        <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span>History</span>
+      </button>
+      <button id="view-toggle-btn" class="btn btn-quiet" type="button" aria-expanded="false" aria-controls="view-panel">
+        <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        <span>View</span>
+      </button>
+      <button id="reset-camera-btn" class="btn btn-quiet" type="button" title="Center full galaxy">
+        <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+        <span>Show everything</span>
+      </button>
+      <button id="spotify-btn" class="btn btn-spotify" type="button">
+        <svg class="btn-icon btn-spotify-icon" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+        <span>Connect Spotify</span>
+      </button>
     </div>
   </header>
 
@@ -55,31 +75,60 @@
 
   <!-- View settings popover -->
   <section id="view-panel" class="panel" hidden aria-label="View settings">
-    <fieldset>
-      <legend>Show</legend>
-      <label><input type="checkbox" id="toggle-genres" checked> Clusters</label>
-      <label><input type="checkbox" id="toggle-artists" checked> Artists</label>
-      <label><input type="checkbox" id="toggle-tracks" checked> Songs</label>
-      <label><input type="checkbox" id="toggle-history-songs" checked> History songs</label>
-      <label><input type="checkbox" id="toggle-edges" checked> Connections</label>
-      <label><input type="checkbox" id="toggle-labels" checked> Names</label>
+    <div class="view-panel-header">
+      <h3 class="view-panel-title">View Options</h3>
+    </div>
+    <fieldset class="toggle-group">
+      <legend class="sr-only">Layers</legend>
+      <label class="toggle-row">
+        <span class="toggle-label">Clusters</span>
+        <input type="checkbox" id="toggle-genres" checked>
+        <span class="toggle-slider"></span>
+      </label>
+      <label class="toggle-row">
+        <span class="toggle-label">Artists</span>
+        <input type="checkbox" id="toggle-artists" checked>
+        <span class="toggle-slider"></span>
+      </label>
+      <label class="toggle-row">
+        <span class="toggle-label">Songs</span>
+        <input type="checkbox" id="toggle-tracks" checked>
+        <span class="toggle-slider"></span>
+      </label>
+      <label class="toggle-row">
+        <span class="toggle-label">History songs</span>
+        <input type="checkbox" id="toggle-history-songs" checked>
+        <span class="toggle-slider"></span>
+      </label>
+      <label class="toggle-row">
+        <span class="toggle-label">Connections</span>
+        <input type="checkbox" id="toggle-edges" checked>
+        <span class="toggle-slider"></span>
+      </label>
+      <label class="toggle-row">
+        <span class="toggle-label">Names</span>
+        <input type="checkbox" id="toggle-labels" checked>
+        <span class="toggle-slider"></span>
+      </label>
     </fieldset>
-    <label class="slider">
-      <span>Glow <output id="glow-val">100%</output></span>
-      <input type="range" id="glow-slider" min="0" max="1.5" step="0.05" value="1">
-    </label>
-    <label class="slider">
-      <span>Motion <output id="orbit-speed-val">1×</output></span>
-      <input type="range" id="orbit-speed-slider" min="0" max="3" step="0.1" value="1">
-    </label>
-    <label class="slider">
-      <span>Planet size <output id="node-scale-val">1×</output></span>
-      <input type="range" id="node-scale-slider" min="0.5" max="2" step="0.1" value="1">
-    </label>
-    <label class="slider">
-      <span>Cluster spacing <output id="cluster-spread-val">1×</output></span>
-      <input type="range" id="cluster-spread-slider" min="0.6" max="2.2" step="0.05" value="1">
-    </label>
+    <div class="slider-group">
+      <label class="slider">
+        <span>Glow <output id="glow-val">100%</output></span>
+        <input type="range" id="glow-slider" min="0" max="1.5" step="0.05" value="1">
+      </label>
+      <label class="slider">
+        <span>Motion <output id="orbit-speed-val">1×</output></span>
+        <input type="range" id="orbit-speed-slider" min="0" max="3" step="0.1" value="1">
+      </label>
+      <label class="slider">
+        <span>Planet size <output id="node-scale-val">1×</output></span>
+        <input type="range" id="node-scale-slider" min="0.5" max="2" step="0.1" value="1">
+      </label>
+      <label class="slider">
+        <span>Cluster spacing <output id="cluster-spread-val">1×</output></span>
+        <input type="range" id="cluster-spread-slider" min="0.6" max="2.2" step="0.05" value="1">
+      </label>
+    </div>
   </section>
 
   <!-- Floating touch/mobile navigation bar: quick zoom in, zoom out, and reset view -->
@@ -107,7 +156,10 @@
       <div id="songs-browser" hidden></div>
     </div>
     <div id="detail-view" hidden>
-      <button id="detail-back-btn" class="btn btn-quiet btn-back" type="button">All clusters</button>
+      <button id="detail-back-btn" class="btn btn-quiet btn-back" type="button">
+        <svg class="back-arrow-svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        <span>All clusters</span>
+      </button>
       <div id="detail-content"></div>
     </div>
   </aside>
