@@ -14,11 +14,9 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<
  * label that would overlap an already placed one is hidden, so the screen never
  * turns into a pile of text.
  *
- * Visually differentiates:
- *  - Genre Suns (italic serif cluster title + count)
- *  - Primary Selected Artist (solid bright pill with a `PRIMARY` glow border & badge)
- *  - Collaborator Artists (cyan dashed `COLLAB` pill badge: `border: 1px dashed #38bdf8; color: #7dd3fc`)
- *  - Song Moons (`◆ ♪` crystal icon + faceted pill styling so songs never look like artists)
+ * Guarantees that labels are NEVER shown for dimmed/unlit/culled nodes (`focusTarget < 0.65`
+ * or `lensScale <= 0.01`), and when a Time & Memory Lens is active, only nodes that
+ * match the lens are labeled.
  */
 export class LabelProjector {
   constructor(containerEl) {
@@ -113,8 +111,12 @@ export class LabelProjector {
   }
 
   priorityOf(node, selectedNode, hoveredNode = null, activeLens = 'all') {
-    // Always show the hovered node's label at top priority so hovering any planet/moon identifies it
     if (hoveredNode && node.id === hoveredNode.id) return 0;
+
+    // Never label a dimmed/unlit/culled planet or moon
+    if (node.type !== 'genre' && ((node.focusTarget ?? 1) < 0.65 || (node.lensScale ?? 1) <= 0.01)) {
+      return -1;
+    }
 
     const hasLens = Boolean(activeLens && activeLens !== 'all');
     const matchesLens = hasLens ? nodeMatchesLens(node, activeLens) : true;
@@ -143,20 +145,23 @@ export class LabelProjector {
         return -1;
       }
 
-      // Cluster Focus Mode
+      // Cluster Focus Mode: strictly enforce lens filter if active
       if (selectedNode.neighbors?.has(node.id)) {
         if (node.type === 'genre') return 1;
-        if (hasLens && matchesLens) return 1.5;
+        if (hasLens) {
+          return matchesLens ? (node.type === 'artist' ? 1.5 : 2.2) : -1;
+        }
         return node.type === 'artist' ? 2 : 2.5;
       }
       if (selectedNode.type === 'genre' && node.type === 'track' && node.connectedGenres?.includes(selectedNode.name)) {
-        if (hasLens && matchesLens && (node.normScore ?? 0) > 0.35) return 2.8;
-        if (!hasLens && (node.normScore ?? 0) > 0.72) return 3.2;
+        if (hasLens) {
+          return (matchesLens && (node.normScore ?? 0) > 0.35) ? 2.6 : -1;
+        }
+        if ((node.focusTarget ?? 1) >= 0.65 && (node.normScore ?? 0) > 0.72) return 3.2;
       }
       return -1;
     }
 
-    // If hovering a song or artist in overview/lens mode, also label its immediate artist/collaborators
     if (hoveredNode) {
       if (hoveredNode.type === 'track' && node.type === 'artist' && hoveredNode.neighbors?.has(node.id)) {
         return 0.5;
@@ -167,14 +172,8 @@ export class LabelProjector {
     }
 
     if (hasLens) {
-      if (node.type === 'genre') return 2.5;
-      if (!matchesLens) {
-        // Also allow labels for artists who collaborated on a lens-matched song and are lit up
-        if (node.type === 'artist' && (node.focusTarget ?? 0) >= 0.85 && (node.globalRank ?? 999) < 80) {
-          return 2.2;
-        }
-        return -1;
-      }
+      if (node.type === 'genre') return (node.focusTarget ?? 1) >= 0.5 ? 2.5 : -1;
+      if (!matchesLens) return -1;
       if (node.type === 'artist') {
         if ((node.globalRank ?? 999) < 40 || (node.normScore ?? 0) > 0.45) return 1;
         return 2;
@@ -211,7 +210,8 @@ export class LabelProjector {
     for (const node of nodes) {
       if (node.meshGroup && !node.meshGroup.visible) continue;
       const isHovered = Boolean(hoveredNode && node.id === hoveredNode.id);
-      if (!isHovered && ((node.focusLevel ?? 1) < 0.08 || (node.focusTarget ?? 1) === 0)) continue;
+      if (!isHovered && node.type !== 'genre' && ((node.focusTarget ?? 1) < 0.65 || (node.lensScale ?? 1) <= 0.01)) continue;
+      if (!isHovered && (node.focusLevel ?? 1) < 0.15) continue;
       const priority = this.priorityOf(node, selectedNode, hoveredNode, activeLens);
       if (priority < 0) continue;
 

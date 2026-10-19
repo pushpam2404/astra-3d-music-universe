@@ -5,26 +5,23 @@ import { createPlanetMaterial, createMoonCrystalMaterial } from './shaders/plane
 import { COLOR_SPOTIFY_GREEN } from '../config/constants.js';
 
 const sunGlowTextureCache = new Map();
-const nebulaTextureCache = new Map();
 
-const FOCUS_LERP = 0.18;
-const SUN_LIGHT_INTENSITY = 1.1;
-const NEBULA_OPACITY = 0.09;
+const FOCUS_LERP = 0.24;
+const SUN_LIGHT_INTENSITY = 1.0;
+const NEBULA_OPACITY = 0.0;
 const MAX_PULSES = 450;
 const STARLIGHT_HEX = '#F4E9C8';
 
-// Soft dim levels so unselected objects remain visibly present in the background without stealing attention
-const DIM_PLANET_FOCUS = 0.22;
-const DIM_SUN_FOCUS = 0.18;
-const DIM_MOON_FOCUS = 0.18;
+// Quiet matte levels for unselected background nodes
+const DIM_PLANET_FOCUS = 0.25;
+const DIM_SUN_FOCUS = 0.22;
+const DIM_MOON_FOCUS = 0.0;
 
-// Connection weights: subtle in overview so long-distance collab lines don't clutter empty space,
-// and high-contrast when focused on an artist, song, or lens.
 const EDGE_STYLE = {
-  artist_genre: { opacity: 0.06, focused: 0.58 },
-  artist_bridge: { opacity: 0.045, focused: 0.72 },
-  track_artist: { opacity: 0.14, focused: 0.96 },
-  track_collab: { opacity: 0.045, focused: 0.88 }
+  artist_genre: { opacity: 0.05, focused: 0.52 },
+  artist_bridge: { opacity: 0.04, focused: 0.68 },
+  track_artist: { opacity: 0.14, focused: 0.95 },
+  track_collab: { opacity: 0.04, focused: 0.88 }
 };
 
 const UP_VEC = new THREE.Vector3(0, 1, 0);
@@ -47,213 +44,25 @@ export function nodeMatchesLens(node, lens) {
   return false;
 }
 
-/**
- * Helper for Artist Focus Mode: keeps unselected nodes in view but dimmed & transparent
- * (`depthWrite = false`, low opacity) while highlighting the selected artist, their songs,
- * and collaborating artists.
- */
 export function applyArtistIsolationMode(sceneState, selectedArtistId) {
   if (!sceneState) return;
-
   if (sceneState.factory && Array.isArray(sceneState.nodes)) {
     const targetNode = selectedArtistId
       ? sceneState.nodes.find(n => n.id === selectedArtistId) || null
       : null;
     sceneState.factory.updateFocus(targetNode, sceneState.nodes, sceneState.edges || [], sceneState.activeLens || 'all');
-    return;
   }
-
-  const {
-    artistMeshes = [],
-    moonMeshes = [],
-    sunMeshes = [],
-    nebulaMeshes = [],
-    graph = { tracks: [] }
-  } = sceneState;
-
-  if (!selectedArtistId) {
-    artistMeshes.forEach((m) => {
-      m.visible = true;
-      m.scale.setScalar(m.userData?.baseScale || 1);
-      if (m.material) {
-        m.material.opacity = 1.0;
-        m.material.depthWrite = true;
-      }
-      if (m.userData?.collabRing) m.userData.collabRing.visible = false;
-      if (m.userData?.selectionCorona) m.userData.selectionCorona.visible = false;
-    });
-    moonMeshes.forEach((m) => {
-      m.visible = true;
-      m.scale.setScalar(m.userData?.baseScale || 1);
-      if (m.material) {
-        m.material.opacity = 1.0;
-        m.material.depthWrite = true;
-      }
-    });
-    sunMeshes.forEach((s) => {
-      s.visible = true;
-      if (s.material) { s.material.opacity = 1.0; s.material.depthWrite = false; }
-    });
-    nebulaMeshes.forEach((n) => {
-      n.visible = true;
-      if (n.material) n.material.opacity = NEBULA_OPACITY;
-    });
-    return;
-  }
-
-  const activeSongIds = new Set();
-  const collabArtistIds = new Set();
-
-  for (const song of (graph.tracks || [])) {
-    const isSelectedSong =
-      song.artistIds?.includes(selectedArtistId) ||
-      song.featArtistIds?.includes(selectedArtistId) ||
-      song.primaryArtistId === selectedArtistId ||
-      song.artistId === selectedArtistId;
-    if (isSelectedSong) {
-      activeSongIds.add(song.id);
-      const credited = song.artistIds || [song.artistId, ...(song.featArtistIds || [])].filter(Boolean);
-      credited.forEach((aid) => {
-        if (aid && aid !== selectedArtistId) collabArtistIds.add(aid);
-      });
-    }
-  }
-
-  sunMeshes.forEach((s) => {
-    s.visible = true;
-    if (s.material) {
-      s.material.transparent = true;
-      s.material.opacity = DIM_SUN_FOCUS;
-      s.material.depthWrite = false;
-    }
-  });
-  nebulaMeshes.forEach((n) => {
-    n.visible = true;
-    if (n.material) n.material.opacity = NEBULA_OPACITY * 0.2;
-  });
-
-  artistMeshes.forEach((mesh) => {
-    const id = mesh.userData?.artistId ?? mesh.userData?.node?.id;
-    const baseScale = mesh.userData?.baseScale || 1;
-    mesh.visible = true;
-
-    if (id === selectedArtistId) {
-      mesh.scale.setScalar(baseScale * 1.32);
-      if (mesh.material) {
-        mesh.material.opacity = 1.0;
-        mesh.material.depthWrite = true;
-      }
-      if (mesh.userData?.collabRing) mesh.userData.collabRing.visible = false;
-    } else if (collabArtistIds.has(id)) {
-      mesh.scale.setScalar(baseScale * 1.08);
-      if (mesh.material) {
-        mesh.material.opacity = 1.0;
-        mesh.material.depthWrite = true;
-      }
-      if (mesh.userData?.collabRing) mesh.userData.collabRing.visible = true;
-    } else {
-      mesh.scale.setScalar(baseScale * 0.85);
-      if (mesh.material) {
-        mesh.material.transparent = true;
-        mesh.material.opacity = DIM_PLANET_FOCUS;
-        mesh.material.depthWrite = false;
-      }
-      if (mesh.userData?.collabRing) mesh.userData.collabRing.visible = false;
-    }
-  });
-
-  moonMeshes.forEach((moon) => {
-    const id = moon.userData?.trackId ?? moon.userData?.node?.id;
-    const baseScale = moon.userData?.baseScale || 1;
-    moon.visible = true;
-
-    if (activeSongIds.has(id)) {
-      moon.scale.setScalar(baseScale * 1.4);
-      if (moon.material) {
-        moon.material.opacity = 1.0;
-        moon.material.depthWrite = true;
-      }
-    } else {
-      moon.scale.setScalar(baseScale * 0.75);
-      if (moon.material) {
-        moon.material.transparent = true;
-        moon.material.opacity = DIM_MOON_FOCUS;
-        moon.material.depthWrite = false;
-      }
-    }
-  });
 }
 
-/**
- * Soft, see-through solar corona texture used exclusively for Cluster Centers (Genre Suns)
- * so cluster centers shine warmly without blocking any planets, moons, or lines behind them.
- */
 export function getProceduralGlowTexture(hexColor) {
   if (sunGlowTextureCache.has(hexColor)) return sunGlowTextureCache.get(hexColor);
 
-  const size = 128;
+  const size = 64;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  const c = new THREE.Color(hexColor);
-  const rgb = `${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}`;
-
-  const gradient = ctx.createRadialGradient(size / 2, size / 2, 1, size / 2, size / 2, size / 2);
-  gradient.addColorStop(0.0, 'rgba(255, 248, 232, 0.72)');
-  gradient.addColorStop(0.22, `rgba(${rgb}, 0.48)`);
-  gradient.addColorStop(0.55, `rgba(${rgb}, 0.14)`);
-  gradient.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-
   const texture = new THREE.CanvasTexture(canvas);
   sunGlowTextureCache.set(hexColor, texture);
-  return texture;
-}
-
-/**
- * Subtle nebula backdrop per cluster.
- */
-function getNebulaTexture(hexColor) {
-  if (nebulaTextureCache.has(hexColor)) return nebulaTextureCache.get(hexColor);
-
-  const size = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  const c = new THREE.Color(hexColor);
-  const rgb = `${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}`;
-
-  let seed = parseInt(hexColor.replace('#', ''), 16) || 1;
-  const rand = () => {
-    seed = (seed * 1664525 + 1013904223) % 4294967296;
-    return seed / 4294967296;
-  };
-
-  ctx.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < 12; i++) {
-    const angle = rand() * Math.PI * 2;
-    const dist = rand() * size * 0.22;
-    const x = size / 2 + Math.cos(angle) * dist;
-    const y = size / 2 + Math.sin(angle) * dist;
-    const r = size * (0.16 + rand() * 0.22);
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `rgba(${rgb}, ${0.14 + rand() * 0.1})`);
-    g.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, size, size);
-  }
-  ctx.globalCompositeOperation = 'destination-in';
-  const mask = ctx.createRadialGradient(size / 2, size / 2, size * 0.2, size / 2, size / 2, size / 2);
-  mask.addColorStop(0, 'rgba(0,0,0,1)');
-  mask.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = mask;
-  ctx.fillRect(0, 0, size, size);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  nebulaTextureCache.set(hexColor, texture);
   return texture;
 }
 
@@ -277,9 +86,6 @@ function createSolidOrbitLine(radius, colorHex, opacity = 0.55, tiltX = Math.PI 
   return line;
 }
 
-/**
- * Creates a crisp dashed orbital line loop for Collaborator Artists in their cluster color.
- */
 function createDashedOrbitLoop(radius, colorHex = STARLIGHT_HEX, opacity = 0.85, tiltX = Math.PI / 2.2, tiltY = 0) {
   const segments = 64;
   const pts = [];
@@ -303,26 +109,15 @@ function createDashedOrbitLoop(radius, colorHex = STARLIGHT_HEX, opacity = 0.85,
   return line;
 }
 
-function makeSprite(texture, size, opacity) {
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: texture,
-    transparent: true,
-    opacity,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  }));
-  sprite.scale.set(size, size, 1);
-  return sprite;
-}
-
 /**
  * Builds and styles the celestial meshes:
- *  - Genre Suns (Cluster Centers): warm, see-through solar shine (`depthWrite: false` + radial corona)
- *    that never blocks planets, moons, or lines behind it
- *  - Artist Planets: crisp `SphereGeometry(1, 32, 32)` spheres in refined luxury cluster shades
- *  - Song Moons: faceted `IcosahedronGeometry(1, 0)` crystals matching their parent artist's color
- *  - Dynamic Focus Overlay: weighted 3D connection cylinders for artist <-> song and thinner
- *    same-color cylinders for song <-> collaborator connections.
+ *  - Cluster Centers (Genre Suns): solid, non-glowing 3D central planets with a crisp black
+ *    border on light-colored clusters and zero radial glow/corona blowout.
+ *  - Artist Planets & Song Moons: 100% OPAQUE (`transparent: false, depthWrite: true`)
+ *    with a crisp black border on light-colored clusters so individual overlapping shapes
+ *    are immediately recognizable.
+ *  - Strict Lens & Focus Culling: when a Time/Memory Lens is active, non-matching nodes and
+ *    their lines are culled so only items matching the filter appear.
  */
 export class CelestialFactory {
   constructor(scene) {
@@ -355,12 +150,10 @@ export class CelestialFactory {
     if (node.type === 'genre' && node.sphereMesh) {
       const vis = Boolean(node.meshGroup?.visible !== false);
       node.sphereMesh.visible = vis;
-      // Keep depthWrite false on cluster suns at all times so their shine never blocks anything behind them!
-      node.sphereMesh.material.depthWrite = false;
-      if (node.sprite) node.sprite.visible = vis;
+      node.sphereMesh.material.depthWrite = true;
       if (node.ring) node.ring.visible = vis && fl >= 0.35;
     }
-    if (node.light) node.light.intensity = SUN_LIGHT_INTENSITY * this.glow * Math.min(1.0, fl);
+    if (node.light) node.light.intensity = SUN_LIGHT_INTENSITY * Math.min(1.0, fl);
   }
 
   setGlow(level, nodes) {
@@ -372,35 +165,25 @@ export class CelestialFactory {
     const group = new THREE.Group();
     group.position.copy(node.position);
 
+    // Solid, non-glowing central planet at the center of every cluster
     const shaderMat = createSolarShaderMaterial(node.color, node.energy || 0.8);
     this.solarMaterials.push(shaderMat);
     const sphereMesh = new THREE.Mesh(new THREE.SphereGeometry(node.baseRadius, 48, 48), shaderMat);
-    sphereMesh.renderOrder = -1;
+    sphereMesh.renderOrder = 0;
     sphereMesh.userData = { node };
     group.add(sphereMesh);
 
-    // Soft see-through solar shine around the cluster center (drawn behind planets with depthWrite: false)
-    const corona = makeSprite(getProceduralGlowTexture(node.color), node.baseRadius * 3.8, 0.46);
-    corona.renderOrder = -1;
-    group.add(corona);
-    this.register(node, corona.material, 0.46, false, true);
-
-    const ring = createSolidOrbitLine(node.baseRadius * 1.48, node.color, 0.32, Math.PI / 2.2, Math.PI / 7.0);
+    const ring = createSolidOrbitLine(node.baseRadius * 1.42, node.color, 0.28, Math.PI / 2.2, Math.PI / 7.0);
     group.add(ring);
-    this.register(node, ring.material, 0.32);
-
-    const nebulaSize = (node.clusterRadius || 60) * 1.7;
-    const nebula = makeSprite(getNebulaTexture(node.color), nebulaSize, NEBULA_OPACITY);
-    nebula.renderOrder = -2;
-    group.add(nebula);
-    node.nebula = nebula;
+    this.register(node, ring.material, 0.28);
 
     node.light = new THREE.PointLight(node.color, SUN_LIGHT_INTENSITY, (node.clusterRadius || 80) * 1.5, 1.2);
     group.add(node.light);
 
     node.meshGroup = group;
     node.sphereMesh = sphereMesh;
-    node.sprite = corona;
+    node.sprite = null;
+    node.nebula = null;
     node.ring = ring;
     node.shaderMaterial = shaderMat;
     this.scene.add(group);
@@ -411,6 +194,7 @@ export class CelestialFactory {
     const n = Math.max(1, artistNodes.length);
     const geometry = new THREE.SphereGeometry(1, 32, 32);
     const info = new Float32Array(n * 3);
+
     const mesh = new THREE.InstancedMesh(geometry, createPlanetMaterial(), n);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = false;
@@ -419,12 +203,11 @@ export class CelestialFactory {
 
     artistNodes.forEach((node, i) => {
       const listen = node.normScore ?? 1;
-      // Strictly keep seedFrac in [0.005, 0.485] so (roleCode + seedFrac) never crosses an integer boundary!
       const rawHash = Math.abs(parseInt(String(node.id).replace(/[^0-9a-z]/gi, '').slice(-6), 36) || (i * 137));
       const seed = (rawHash % 480) / 1000 + 0.005;
       node.artistIndex = i;
       node.seedFrac = seed;
-      node.roleCode = 0; // 0 = normal, 1 = selected main artist, 2 = collaborator artist
+      node.roleCode = 0;
       node.lensScale = 1.0;
       node.meshGroup = { position: new THREE.Vector3(), scale: new THREE.Vector3(1, 1, 1), visible: true, isInstanceHandle: true };
       mesh.setColorAt(i, new THREE.Color(node.color));
@@ -445,26 +228,31 @@ export class CelestialFactory {
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
     this.artistMesh = mesh;
+    this.artistDimMesh = null;
     this.artistNodes = artistNodes;
     this.artistInfo = geometry.getAttribute('aInfo');
     this.artistDecor = decor;
     this.scene.add(mesh, decor);
   }
 
-  updateArtistInstances() {
+  updateArtistInstances(hoveredNode = null) {
     if (!this.artistMesh) return;
     const m = this._am || (this._am = new THREE.Matrix4());
     const q = this._aq || (this._aq = new THREE.Quaternion());
     const sc = this._as || (this._as = new THREE.Vector3());
     for (const node of this.artistNodes) {
       const h = node.meshGroup;
-      const activeVisible = Boolean(h.visible);
-      const r = activeVisible ? node.baseRadius * (node.lensScale ?? 1) : 0;
+      const isHovered = Boolean(hoveredNode && hoveredNode.id === node.id);
+      const scaleVal = isHovered ? Math.max(1.35, node.lensScale ?? 1) : (node.lensScale ?? 1);
+      const activeVisible = Boolean(h.visible) && (scaleVal > 0.01) && ((node.focusTarget ?? 1) > 0.05 || isHovered);
+      const isLit = (node.focusTarget ?? 1) >= 0.65 || isHovered;
+      const baseR = isLit ? Math.max(1.35, node.baseRadius) : node.baseRadius;
+      const r = activeVisible ? baseR * scaleVal : 0;
       sc.copy(h.scale).multiplyScalar(r);
       m.compose(h.position, q, sc);
       this.artistMesh.setMatrixAt(node.artistIndex, m);
 
-      const showDecor = activeVisible && (node.focusLevel ?? 1) >= 0.65;
+      const showDecor = activeVisible && isLit;
       for (const d of node.decor) {
         d.visible = showDecor;
         if (!showDecor) continue;
@@ -477,16 +265,12 @@ export class CelestialFactory {
     this.updateFocusHighlightPositions();
   }
 
-  /**
-   * Builds Song Moons as faceted 3D crystalline icosahedrons (`IcosahedronGeometry(1, 0)`)
-   * while matching each moon's color directly to its parent artist's color (`node.color`).
-   */
   buildTrackSatellites(trackNodes) {
     const n = Math.max(1, trackNodes.length);
     const geometry = new THREE.IcosahedronGeometry(1, 0);
-    const material = createMoonCrystalMaterial();
     const moonInfo = new Float32Array(n * 3);
-    const mesh = new THREE.InstancedMesh(geometry, material, n);
+
+    const mesh = new THREE.InstancedMesh(geometry, createMoonCrystalMaterial(), n);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = false;
 
@@ -511,13 +295,14 @@ export class CelestialFactory {
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
     this.trackMesh = mesh;
+    this.trackDimMesh = null;
     this.trackNodes = trackNodes;
     this.trackInfo = geometry.getAttribute('aMoonInfo');
     this.scene.add(mesh);
     return mesh;
   }
 
-  updateTrackInstances() {
+  updateTrackInstances(hoveredNode = null) {
     if (!this.trackMesh) return;
     const m = this._m || (this._m = new THREE.Matrix4());
     const q = this._q || (this._q = new THREE.Quaternion());
@@ -527,8 +312,12 @@ export class CelestialFactory {
 
     for (const node of this.trackNodes) {
       const h = node.meshGroup;
-      const activeVisible = Boolean(h.visible);
-      const r = activeVisible ? node.baseRadius * (node.lensScale ?? 1) : 0;
+      const isHovered = Boolean(hoveredNode && hoveredNode.id === node.id);
+      const scaleVal = isHovered ? Math.max(1.6, node.lensScale ?? 1) : (node.lensScale ?? 1);
+      const activeVisible = Boolean(h.visible) && (scaleVal > 0.01) && ((node.focusTarget ?? 1) > 0.05 || isHovered);
+      const isLit = (node.focusTarget ?? 1) >= 0.65 || isHovered;
+      const baseR = isLit ? Math.max(0.68, node.baseRadius) : node.baseRadius;
+      const r = activeVisible ? baseR * scaleVal : 0;
       sc.copy(h.scale).multiplyScalar(r);
       if (activeVisible) {
         euler.set(spin + (node.instanceIndex % 7) * 0.4, spin * 1.3 + (node.instanceIndex % 11) * 0.3, 0);
@@ -558,10 +347,6 @@ export class CelestialFactory {
     this.mainArtistBeacon = null;
   }
 
-  /**
-   * Creates a weighted 3D cylinder link between two nodes so connections between
-   * artists, songs, and collaborators are clearly visible.
-   */
   addConnectionTube(sourceNode, targetNode, colorHex, radius = 0.08, opacity = 0.72) {
     const geom = new THREE.CylinderGeometry(radius, radius, 1, 6, 1, true);
     const mat = new THREE.MeshBasicMaterial({
@@ -576,11 +361,6 @@ export class CelestialFactory {
     this.dynamicConnectionTubes.push({ mesh, source: sourceNode, target: targetNode });
   }
 
-  /**
-   * Builds crisp geometric overlays and weighted 3D connection links for the focused artist or song:
-   *  - Artist <-> Song links use weighted tubes in the artist's color (`radius = 0.082`)
-   *  - Song <-> Collaborator links use a thinner line of the SAME color (`radius = 0.044`, NOT blue!)
-   */
   rebuildFocusHighlights(activeNode, artistTracks = [], collabArtists = []) {
     this.clearFocusHighlights();
     if (!activeNode) return;
@@ -588,12 +368,10 @@ export class CelestialFactory {
     if (activeNode.type === 'artist') {
       const baseColor = activeNode.color || STARLIGHT_HEX;
 
-      // 1. Crisp thin geometric ring around the selected artist
       const beacon = new THREE.Group();
       const primaryRing = createSolidOrbitLine(activeNode.baseRadius * 1.65, STARLIGHT_HEX, 0.72, Math.PI / 2.1, 0.2);
       beacon.add(primaryRing);
 
-      // Subtle thin orbital paths where the artist's song moons orbit
       const uniqueOrbitRadii = [];
       const sortedTracks = artistTracks.slice().sort((a, b) => (a.moonRadius || 0) - (b.moonRadius || 0));
       for (const tNode of sortedTracks) {
@@ -612,21 +390,17 @@ export class CelestialFactory {
       this.focusHighlightGroup.add(beacon);
       this.mainArtistBeacon = { group: beacon, node: activeNode };
 
-      // 2. Collaborator Artist dashed orbital rings in matching color (no blue)
       const collabById = new Map();
       collabArtists.forEach(cNode => {
         collabById.set(cNode.id, cNode);
         const marker = new THREE.Group();
-        const r = Math.max(1.5, cNode.baseRadius * 1.08);
+        const r = Math.max(1.5, cNode.baseRadius * 1.15);
         const dashedRing = createDashedOrbitLoop(r * 1.55, cNode.color || baseColor, 0.82, Math.PI / 2.2, Math.PI / 6);
         marker.add(dashedRing);
         this.focusHighlightGroup.add(marker);
         this.dynamicCollabMarkers.push({ group: marker, node: cNode });
       });
 
-      // 3. Weighted 3D connection tubes:
-      //    - Artist <-> Song Moon: main weight (0.082) in the artist's color
-      //    - Song Moon <-> Collaborating Artist: thinner line (0.044) of the SAME color!
       artistTracks.forEach(tNode => {
         const lineColor = activeNode.color || tNode.color || STARLIGHT_HEX;
         this.addConnectionTube(
@@ -662,7 +436,7 @@ export class CelestialFactory {
       collabArtists.forEach(cNode => {
         const isPrimary = cNode.id === activeNode.artistId;
         const marker = new THREE.Group();
-        const r = Math.max(1.5, cNode.baseRadius * (isPrimary ? 1.32 : 1.08));
+        const r = Math.max(1.5, cNode.baseRadius * (isPrimary ? 1.32 : 1.15));
         const ring = isPrimary
           ? createSolidOrbitLine(r * 1.55, STARLIGHT_HEX, 0.82, Math.PI / 2.2, Math.PI / 6)
           : createDashedOrbitLoop(r * 1.55, cNode.color || songColor, 0.82, Math.PI / 2.2, Math.PI / 6);
@@ -670,7 +444,6 @@ export class CelestialFactory {
         this.focusHighlightGroup.add(marker);
         this.dynamicCollabMarkers.push({ group: marker, node: cNode });
 
-        // Primary artist gets main weight (0.085); collaborating artists get a thinner line (0.044) of the same color
         this.addConnectionTube(
           activeNode,
           cNode,
@@ -720,14 +493,14 @@ export class CelestialFactory {
     [this.trackMesh, this.artistMesh, this.edgeLines, this.pulseMesh].forEach(obj => {
       if (!obj) return;
       this.scene.remove(obj);
-      obj.geometry.dispose();
-      obj.material.dispose();
+      obj.geometry?.dispose();
+      obj.material?.dispose();
     });
     if (this.artistDecor) {
       this.scene.remove(this.artistDecor);
       this.artistDecor.children.forEach(d => { d.geometry?.dispose(); d.material.dispose(); });
     }
-    this.trackMesh = this.artistMesh = this.edgeLines = this.pulseMesh = this.artistDecor = null;
+    this.trackMesh = this.trackDimMesh = this.artistMesh = this.artistDimMesh = this.edgeLines = this.pulseMesh = this.artistDecor = null;
     this.trackNodes = [];
     this.artistNodes = [];
   }
@@ -739,7 +512,6 @@ export class CelestialFactory {
       const isBridgeLink = edge.type === 'artist_genre' && edge.source.genres?.[1] === edge.target.id;
       edge.style = EDGE_STYLE[isBridgeLink ? 'artist_bridge' : edge.type] || EDGE_STYLE.track_artist;
       edge.index = i;
-      // Keep collaboration lines in the same color as the parent artist/song rather than blue
       edge.baseColor = new THREE.Color(edge.color || edge.source?.color || STARLIGHT_HEX);
       edge.level = edge.style.opacity;
       this.writeEdgeColor(colors, edge);
@@ -751,11 +523,12 @@ export class CelestialFactory {
     const material = new THREE.LineBasicMaterial({
       vertexColors: true,
       transparent: true,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       depthWrite: false
     });
     const lines = new THREE.LineSegments(geometry, material);
     lines.frustumCulled = false;
+    lines.renderOrder = -1;
     this.edgeLines = lines;
 
     const collabEdges = edges.filter(e => e.type === 'track_collab');
@@ -764,7 +537,7 @@ export class CelestialFactory {
 
     const pulseMesh = new THREE.InstancedMesh(
       new THREE.SphereGeometry(0.28, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false }),
       Math.max(1, pulseEdges.length)
     );
     pulseMesh.count = pulseEdges.length;
@@ -803,7 +576,14 @@ export class CelestialFactory {
     for (const e of edges) {
       const o = e.index * 6;
       const s = e.source.position, d = e.target.position;
-      const hidden = !e.source.meshGroup?.visible || !e.target.meshGroup?.visible || e.level < 0.004;
+      const hidden =
+        !e.source.meshGroup?.visible ||
+        !e.target.meshGroup?.visible ||
+        e.level < 0.015 ||
+        (e.source.lensScale ?? 1) <= 0.01 ||
+        (e.target.lensScale ?? 1) <= 0.01 ||
+        (e.source.focusTarget ?? 1) < 0.65 ||
+        (e.target.focusTarget ?? 1) < 0.65;
       if (hidden) {
         arr[o] = arr[o + 3] = s.x; arr[o + 1] = arr[o + 4] = s.y; arr[o + 2] = arr[o + 5] = s.z;
         continue;
@@ -823,7 +603,15 @@ export class CelestialFactory {
       p.progress = (p.progress + p.speed * speedScale) % 1.0;
       v.lerpVectors(p.edge.source.position, p.edge.target.position, p.progress);
       let s = 0;
-      if (p.edge.level > 0.45 && p.edge.source.meshGroup?.visible && p.edge.target.meshGroup?.visible) {
+      if (
+        p.edge.level > 0.45 &&
+        (p.edge.source.lensScale ?? 1) > 0.01 &&
+        (p.edge.target.lensScale ?? 1) > 0.01 &&
+        (p.edge.source.focusTarget ?? 1) >= 0.65 &&
+        (p.edge.target.focusTarget ?? 1) >= 0.65 &&
+        p.edge.source.meshGroup?.visible &&
+        p.edge.target.meshGroup?.visible
+      ) {
         s = p.edge.type === 'track_collab' ? 0.65 : 0.75;
       }
       m.makeScale(s, s, s).setPosition(v);
@@ -839,24 +627,11 @@ export class CelestialFactory {
     this.updateFocus(activeNode, nodes, edges, activeLens);
   }
 
-  /**
-   * Focus & Dimming Mode:
-   * Guarantees that every illuminated connection line has BOTH of its endpoint nodes
-   * illuminated and clearly visible.
-   */
-  updateFocus(activeNode, nodes, edges, activeLens = 'all') {
+  updateFocus(activeNode, nodes, edges, activeLens = 'all', hoveredNode = null) {
     const hasLens = Boolean(activeLens && activeLens !== 'all');
     const key = `${activeNode ? activeNode.id : 'none'}|${activeLens || 'all'}`;
     if (key !== this.focusKey) {
       this.focusKey = key;
-
-      const isFocusedView = Boolean(activeNode || hasLens);
-      if (this.artistMesh?.material) {
-        this.artistMesh.material.depthWrite = !isFocusedView;
-      }
-      if (this.trackMesh?.material) {
-        this.trackMesh.material.depthWrite = !isFocusedView;
-      }
 
       const lensMatch = new Set();
       const lensClusterHasMatch = new Set();
@@ -865,10 +640,8 @@ export class CelestialFactory {
         for (const n of nodes) {
           if (n.type !== 'genre' && nodeMatchesLens(n, activeLens)) {
             lensMatch.add(n.id);
-            if (n.type === 'track') {
-              if (n.artistId) lensArtistHasMatchTrack.add(n.artistId);
-              (n.featArtistIds || []).forEach(fId => { if (fId) lensArtistHasMatchTrack.add(fId); });
-              if (n.featArtistId) lensArtistHasMatchTrack.add(n.featArtistId);
+            if (n.type === 'track' && n.artistId) {
+              lensArtistHasMatchTrack.add(n.artistId);
             }
             if (n.type === 'artist') {
               (n.genres || []).forEach(gId => lensClusterHasMatch.add(gId));
@@ -902,37 +675,34 @@ export class CelestialFactory {
 
         nodes.forEach(n => {
           let target = DIM_PLANET_FOCUS;
-          let scale = 0.85;
+          let scale = 0.55;
           let roleCode = 0;
 
           if (n.id === activeNode.id) {
-            target = 1.25;
-            scale = 1.32;
+            target = 1.35;
+            scale = 1.38;
             roleCode = 1;
           } else if (artistTrackIds.has(n.id)) {
             const isCollabSong = activeNode.collabTrackIds?.has(n.id) || (n.featArtistIds?.length > 0);
-            const matches = !hasLens || lensMatch.has(n.id);
-            target = matches ? 1.2 : 0.65;
-            scale = isCollabSong ? 1.5 : 1.38;
+            target = 1.25;
+            scale = isCollabSong ? 1.55 : 1.42;
           } else if (collabArtistIds.has(n.id)) {
-            target = 1.15;
-            scale = 1.1;
+            target = 1.2;
+            scale = 1.18;
             roleCode = 2;
             collabArtistNodes.push(n);
           } else if (n.type === 'genre') {
             target = DIM_SUN_FOCUS;
-            scale = 0.9;
-          } else if (n.type === 'track') {
-            target = DIM_MOON_FOCUS;
-            scale = 0.75;
-          } else {
-            target = DIM_PLANET_FOCUS;
             scale = 0.85;
+          } else if (n.type === 'track') {
+            target = 0.0;
+            scale = 0.0;
           }
 
           n.focusTarget = target;
           n.lensScale = scale;
           n.roleCode = roleCode;
+          if (target >= 0.65 || target === 0.0) n.focusLevel = target;
         });
 
         this.rebuildFocusHighlights(activeNode, artistTrackNodes, collabArtistNodes);
@@ -945,11 +715,11 @@ export class CelestialFactory {
           const touchesCollabArtist = collabArtistIds.has(sId) || collabArtistIds.has(tId);
 
           if (touchesArtistTrack && touchesCollabArtist) {
-            e.focusTarget = 0.72;
+            e.focusTarget = 0.82;
           } else if (touchesSelectedArtist && touchesArtistTrack) {
             e.focusTarget = 0.95;
           } else {
-            e.focusTarget = 0.008;
+            e.focusTarget = 0.0;
           }
         });
       } else if (activeNode?.type === 'track') {
@@ -961,103 +731,147 @@ export class CelestialFactory {
 
         nodes.forEach(n => {
           let target = DIM_PLANET_FOCUS;
-          let scale = 0.85;
+          let scale = 0.55;
           let roleCode = 0;
           if (n.id === activeNode.id) {
-            target = 1.25;
-            scale = 1.9;
+            target = 1.35;
+            scale = 1.95;
           } else if (involvedArtistIds.has(n.id)) {
             const isPrimary = n.id === activeNode.artistId;
-            target = isPrimary ? 1.25 : 1.15;
-            scale = isPrimary ? 1.32 : 1.1;
+            target = isPrimary ? 1.3 : 1.2;
+            scale = isPrimary ? 1.35 : 1.18;
             roleCode = isPrimary ? 1 : 2;
             involvedArtistNodes.push(n);
-          } else if (n.type === 'track' && n.artistId === activeNode.artistId) {
-            target = 0.4;
-            scale = 0.95;
           } else if (n.type === 'genre') {
             target = DIM_SUN_FOCUS;
-            scale = 0.9;
+            scale = 0.85;
           } else if (n.type === 'track') {
-            target = DIM_MOON_FOCUS;
-            scale = 0.75;
+            target = 0.0;
+            scale = 0.0;
           }
           n.focusTarget = target;
           n.lensScale = scale;
           n.roleCode = roleCode;
+          if (target >= 0.65 || target === 0.0) n.focusLevel = target;
         });
 
         this.rebuildFocusHighlights(activeNode, [activeNode], involvedArtistNodes);
 
         edges.forEach(e => {
           const touchesSong = e.source.id === activeNode.id || e.target.id === activeNode.id;
-          e.focusTarget = touchesSong ? 0.85 : 0.008;
+          e.focusTarget = touchesSong ? 0.9 : 0.0;
         });
       } else if (activeNode?.type === 'genre') {
         this.clearFocusHighlights();
-        const lit = new Set([activeNode.id]);
-        activeNode.neighbors?.forEach(id => lit.add(id));
+        const inClusterSet = new Set([activeNode.id]);
+        activeNode.neighbors?.forEach(id => inClusterSet.add(id));
         nodes.forEach(n => {
           if (n.type === 'artist' && n.genres?.includes(activeNode.id)) {
-            n.neighbors?.forEach(id => lit.add(id));
+            inClusterSet.add(n.id);
+            // Only add tracks whose primary artist is in this cluster so we don't pull in foreign cluster tracks
+            n.neighbors?.forEach(id => {
+              const child = this.trackNodes?.find(t => t.id === id);
+              if (child && child.artistId === n.id) inClusterSet.add(id);
+            });
           }
         });
 
         nodes.forEach(n => {
-          const inCluster = lit.has(n.id);
-          let target = inCluster ? 1.0 : (n.type === 'genre' ? DIM_SUN_FOCUS : (n.type === 'track' ? DIM_MOON_FOCUS : DIM_PLANET_FOCUS));
-          let scale = inCluster ? 1.0 : 0.85;
-          if (hasLens && inCluster && n.id !== activeNode.id) {
-            const matches = lensMatch.has(n.id);
-            target = matches ? 1.2 : 0.35;
-            if (matches && n.type === 'track') scale = 1.4;
+          const inCluster = inClusterSet.has(n.id);
+          let target = 0.0;
+          let scale = 0.0;
+          let roleCode = 0;
+
+          if (n.id === activeNode.id) {
+            target = 1.0;
+            scale = 1.0;
+          } else if (inCluster) {
+            if (!hasLens) {
+              target = 1.22;
+              scale = n.type === 'track' ? 1.25 : 1.12;
+              roleCode = n.type === 'artist' ? 1 : 0;
+            } else {
+              const directMatch = lensMatch.has(n.id);
+              const parentOfMatch = n.type === 'artist' && lensArtistHasMatchTrack.has(n.id);
+              if (directMatch || parentOfMatch) {
+                target = directMatch ? 1.32 : 1.12;
+                scale = n.type === 'track' ? 1.5 : (directMatch ? 1.25 : 1.05);
+                roleCode = directMatch && n.type === 'artist' ? 1 : (parentOfMatch ? 2 : 0);
+              } else {
+                // Strictly cull non-matching artists & songs when a lens is active inside a cluster
+                target = 0.0;
+                scale = 0.0;
+              }
+            }
+          } else {
+            if (n.type === 'genre') {
+              target = DIM_SUN_FOCUS;
+              scale = 0.85;
+            } else if (n.type === 'artist' && !hasLens) {
+              target = DIM_PLANET_FOCUS;
+              scale = 0.5;
+            } else {
+              target = 0.0;
+              scale = 0.0;
+            }
           }
+
           n.focusTarget = target;
           n.lensScale = scale;
-          n.roleCode = 0;
+          n.roleCode = roleCode;
+          if (target >= 0.65 || target === 0.0) n.focusLevel = target;
         });
 
         edges.forEach(e => {
-          const bothInCluster = lit.has(e.source.id) && lit.has(e.target.id);
-          e.focusTarget = bothInCluster ? e.style.focused * 0.85 : 0.008;
+          const bothLit = (e.source.focusTarget ?? 0) >= 0.65 && (e.target.focusTarget ?? 0) >= 0.65;
+          const bothInCluster = inClusterSet.has(e.source.id) && inClusterSet.has(e.target.id);
+          e.focusTarget = (bothInCluster && bothLit) ? e.style.focused : 0.0;
         });
       } else {
         this.clearFocusHighlights();
-        const litInLens = new Set();
         nodes.forEach(n => {
           let target = 1.0;
           let scale = 1.0;
+          let roleCode = 0;
           if (hasLens) {
             if (n.type === 'genre') {
-              target = lensClusterHasMatch.has(n.id) ? 0.82 : DIM_SUN_FOCUS;
-              if (lensClusterHasMatch.has(n.id)) litInLens.add(n.id);
+              target = lensClusterHasMatch.has(n.id) ? 0.95 : DIM_SUN_FOCUS;
             } else if (lensMatch.has(n.id)) {
-              target = 1.2;
-              scale = n.type === 'track' ? 1.4 : 1.15;
-              litInLens.add(n.id);
+              target = 1.32;
+              scale = n.type === 'track' ? 1.55 : 1.28;
+              roleCode = n.type === 'artist' ? 1 : 0;
             } else if (n.type === 'artist' && lensArtistHasMatchTrack.has(n.id)) {
-              target = 0.92;
-              scale = 1.05;
-              litInLens.add(n.id);
+              target = 1.12;
+              scale = 1.08;
+              roleCode = 2;
             } else {
-              target = n.type === 'track' ? DIM_MOON_FOCUS : DIM_PLANET_FOCUS;
-              scale = 0.85;
+              target = 0.0;
+              scale = 0.0;
             }
           }
           n.focusTarget = target;
           n.lensScale = scale;
-          n.roleCode = 0;
+          n.roleCode = roleCode;
+          if (target >= 0.65 || target === 0.0) n.focusLevel = target;
         });
 
         edges.forEach(e => {
           if (!hasLens) {
             e.focusTarget = e.style.opacity;
           } else {
-            const bothLit = litInLens.has(e.source.id) && litInLens.has(e.target.id);
+            const bothLit = (e.source.focusTarget ?? 0) >= 0.65 && (e.target.focusTarget ?? 0) >= 0.65;
             const atLeastOneDirectMatch = lensMatch.has(e.source.id) || lensMatch.has(e.target.id);
-            e.focusTarget = (bothLit && atLeastOneDirectMatch) ? Math.min(0.85, e.style.opacity * 2.2) : 0.008;
+            e.focusTarget = (bothLit && atLeastOneDirectMatch) ? Math.min(0.75, e.style.opacity * 2.0) : 0.0;
           }
         });
+      }
+
+      // Hard invariant: NEVER allow any edge to stay lit if either of its endpoints is dimmed (< 0.65)
+      for (const e of edges) {
+        if ((e.source.focusTarget ?? 1) < 0.65 || (e.target.focusTarget ?? 1) < 0.65) {
+          e.focusTarget = 0.0;
+          e.level = 0.0;
+        }
       }
 
       if (this.artistInfo) {
@@ -1080,9 +894,10 @@ export class CelestialFactory {
     let artistInfoDirty = false;
     for (const n of nodes) {
       if (n.focusLevel === undefined) n.focusLevel = 1;
-      const target = n.focusTarget ?? 1;
+      const isHovered = Boolean(hoveredNode && hoveredNode.id === n.id);
+      const target = isHovered ? Math.max(1.3, n.focusTarget ?? 1) : (n.focusTarget ?? 1);
       if (Math.abs(n.focusLevel - target) < 0.003) continue;
-      n.focusLevel += (target - n.focusLevel) * FOCUS_LERP;
+      n.focusLevel = isHovered ? target : (n.focusLevel + (target - n.focusLevel) * FOCUS_LERP);
       if (n.instanceIndex !== undefined && this.trackInfo) {
         this.trackInfo.array[n.instanceIndex * 3] = n.focusLevel;
         trackInfoDirty = true;
@@ -1111,14 +926,7 @@ export class CelestialFactory {
   updateNebulae(camera, suns) {
     for (const sun of suns) {
       if (!sun.nebula) continue;
-      const fl = sun.focusLevel ?? 1;
-      sun.nebula.visible = Boolean(sun.meshGroup?.visible !== false) && fl >= 0.15;
-      if (!sun.nebula.visible) continue;
-      const size = (sun.currentClusterRadius || sun.clusterRadius || 60) * 1.7;
-      sun.nebula.scale.set(size, size, 1);
-      const d = camera.position.distanceTo(sun.position);
-      const fade = THREE.MathUtils.smoothstep(d, size * 0.35, size * 0.9);
-      sun.nebula.material.opacity = NEBULA_OPACITY * Math.min(1, fl) * fade;
+      sun.nebula.visible = false;
     }
   }
 

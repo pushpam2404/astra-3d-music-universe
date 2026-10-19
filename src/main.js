@@ -98,7 +98,8 @@ async function initApp() {
     onFly: (node) => cameraController.flyToNode(node),
     isDemo: () => AppState.isDemo,
     likedSongsConnected: () => !authStatus.missingScopes?.includes('user-library-read'),
-    getActiveLens: () => AppState.activeLens
+    getActiveLens: () => AppState.activeLens,
+    onSetLens: (lens) => hud.setLens(lens)
   });
 
   const hud = new Hud(AppState, {
@@ -333,7 +334,7 @@ async function initApp() {
     return bestFocused || bestAny;
   }
 
-  function pickNode(isTouch = false) {
+  function pickNode(isTouch = false, allowDimmedFallback = true) {
     raycaster.setFromCamera(pointer, camera);
     const interactiveMeshes = [];
     AppState.nodes.forEach(n => {
@@ -348,17 +349,16 @@ async function initApp() {
       interactiveMeshes.push(factory.trackMesh);
     }
 
-    // Filter out invisible objects and prioritize focused nodes over dimmed transparent ones passing in front
     const pickableTargets = interactiveMeshes.filter((m) => m.visible);
     const hits = raycaster.intersectObjects(pickableTargets, false);
     let fallbackDimmed = null;
     for (const hit of hits) {
       const node = factory.nodeFromHit(hit);
       if (!node || node.meshGroup?.visible === false) continue;
-      if ((node.focusTarget ?? 1) >= 0.5) {
+      if ((node.focusTarget ?? 1) >= 0.65) {
         return node;
       }
-      if (!fallbackDimmed) fallbackDimmed = node;
+      if (allowDimmedFallback && !fallbackDimmed) fallbackDimmed = node;
     }
     return fallbackDimmed;
   }
@@ -435,7 +435,9 @@ async function initApp() {
     });
 
     if (factory.trackMesh) factory.trackMesh.visible = AppState.layers.tracks;
+    if (factory.trackDimMesh) factory.trackDimMesh.visible = AppState.layers.tracks && Boolean(AppState.selectedNode || (AppState.activeLens && AppState.activeLens !== 'all'));
     if (factory.artistMesh) factory.artistMesh.visible = factory.artistDecor.visible = AppState.layers.artists;
+    if (factory.artistDimMesh) factory.artistDimMesh.visible = AppState.layers.artists && Boolean(AppState.selectedNode || (AppState.activeLens && AppState.activeLens !== 'all'));
     if (edgeGroup) edgeGroup.visible = AppState.layers.edges;
     factory.focusKey = null;
     hud.renderClusters(suns);
@@ -584,13 +586,13 @@ async function initApp() {
 
     easeViewOffset();
     layout.step(AppState.nodes, delta);
-    factory.updateArtistInstances();
-    factory.updateTrackInstances();
+    factory.updateArtistInstances(AppState.hoveredNode);
+    factory.updateTrackInstances(AppState.hoveredNode);
     factory.updateEdgeGeometry(AppState.edges);
     factory.updatePulses(AppState.pulseParticles, layout.orbitMultiplier);
     factory.updateSolarShaders(now * 0.001);
     factory.updateNebulae(camera, suns);
-    factory.updateFocus(AppState.selectedNode, AppState.nodes, AppState.edges, AppState.activeLens);
+    factory.updateFocus(AppState.selectedNode, AppState.nodes, AppState.edges, AppState.activeLens, AppState.hoveredNode);
 
     cameraController.update(AppState.selectedNode);
 

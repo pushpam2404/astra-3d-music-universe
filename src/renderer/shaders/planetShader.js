@@ -3,18 +3,17 @@ import * as THREE from 'three';
 
 /**
  * Artist Planet Material (InstancedMesh over SphereGeometry(1, 32, 32)):
- * Per instance:
- *  - instanceColor: cluster color
- *  - aInfo.x: normalized listening score (0..1)
- *  - aInfo.y: focus level (< 0.6 = dimmed background planet, 1.0 = normal, > 1.0 = focused artist)
- *  - aInfo.z: floor(aInfo.z + 0.001) encodes role (0 = default, 1 = selected main artist, 2 = collaborator artist),
- *             fract(aInfo.z) is deterministic band seed in [0.005 .. 0.485] so it NEVER overflows into role 1.
+ * 100% OPAQUE (`transparent: false, depthWrite: true`) so planets are solid 3D bodies
+ * and never look like see-through bubbles.
  *
- * Renders crisp, non-glowing 3D spheres in their refined cluster colors.
+ * Includes a crisp black silhouette border on light-colored clusters so individual
+ * overlapping spheres are immediately recognizable.
  */
 export function createPlanetMaterial() {
   return new THREE.ShaderMaterial({
-    transparent: true,
+    transparent: false,
+    depthWrite: true,
+    depthTest: true,
     vertexShader: /* glsl */ `
       attribute vec3 aInfo;
       varying vec3 vNormal;
@@ -45,50 +44,70 @@ export function createPlanetMaterial() {
 
       void main() {
         float focus = vInfo.y;
-        // seedFrac is strictly in [0.005, 0.485], so floor(vInfo.z + 0.001) is exact role (0, 1, or 2)
+        if (focus < 0.05) {
+          discard;
+        }
+
         float role = floor(vInfo.z + 0.001);
         float seed = fract(vInfo.z) * 12.566;
-
-        vec3 normal = normalize(vNormal);
-        vec3 viewDir = normalize(vViewPosition);
-        float ndotv = max(0.0, dot(normal, viewDir));
-        float rim = pow(1.0 - ndotv, 2.6);
-        vec3 lightDir = normalize(vec3(0.45, 0.75, 0.55));
-        float diff = smoothstep(-0.25, 1.0, dot(normal, lightDir));
-
-        // Subtle planetary bands
-        float bands = sin(vLocal.y * 10.5 + seed + sin(vLocal.x * 4.5 + seed) * 0.65);
-        vec3 surface = vColor * (0.92 + bands * 0.10);
-
-        float listenBoost = 0.68 + 0.32 * vInfo.x;
-        vec3 baseShaded = (surface * (0.40 + 0.60 * diff) + vColor * rim * 0.32) * listenBoost;
 
         float camDist = length(vViewPosition);
         vec2 ndc = vClipPos.xy / max(0.001, vClipPos.w);
         float centerDist = length(ndc);
-        vec3 color = baseShaded;
-        float alpha = 1.0;
 
-        if (role > 0.5 && role < 1.5) {
-          // Role 1: Main selected artist — crisp, rich true color with a subtle warm starlight rim
-          color = surface * (0.45 + 0.62 * diff) + mix(vColor, vec3(0.98, 0.94, 0.84), 0.32) * rim * 0.45;
-          alpha = 1.0;
-        } else if (role >= 1.5) {
-          // Role 2: Collaborator artist — keeps its natural cluster color with a subtle warm rim (no blue tint)
-          color = surface * (0.42 + 0.60 * diff) + mix(vColor, vec3(0.96, 0.91, 0.78), 0.25) * rim * 0.40;
-          alpha = 1.0;
-        } else if (focus < 0.75) {
-          // Unselected / dimmed planet: keep RGB color intact and dim via alpha so it stays softly visible and see-through
-          color = baseShaded * 0.78;
-          float baseAlpha = clamp(focus * 1.45, 0.22, 0.68);
-          float lineOfSightFade = mix(0.38, 1.0, smoothstep(0.0, 0.42, centerDist));
-          float nearCameraFade = smoothstep(6.0, 36.0, camDist);
-          alpha = clamp(baseAlpha * lineOfSightFade * nearCameraFade, 0.08, 0.68);
-        } else {
-          alpha = smoothstep(4.0, 16.0, camDist);
+        // If an unselected/dimmed planet revolves directly in front of the camera lens,
+        // step it out of the way so it never blocks the focused artist behind it.
+        if (focus < 0.65 && camDist < 28.0 && centerDist < 0.38) {
+          discard;
         }
 
-        gl_FragColor = vec4(color, alpha);
+        vec3 normal = normalize(vNormal);
+        vec3 viewDir = normalize(vViewPosition);
+        float ndotv = max(0.0, dot(normal, viewDir));
+
+        // Solid 3D sphere lighting: key light + fill light + limb darkening (no soap-bubble bright rim!)
+        vec3 keyLight = normalize(vec3(0.42, 0.72, 0.55));
+        float diff = smoothstep(-0.15, 0.95, dot(normal, keyLight));
+        vec3 halfVec = normalize(keyLight + viewDir);
+        float spec = pow(max(0.0, dot(normal, halfVec)), 28.0);
+
+        float limb = 0.60 + 0.40 * pow(ndotv, 0.52);
+
+        float bands = sin(vLocal.y * 10.0 + seed + sin(vLocal.x * 4.0 + seed) * 0.55);
+        vec3 surface = vColor * (0.95 + bands * 0.06);
+
+        float listenBoost = 0.84 + 0.16 * vInfo.x;
+        vec3 solidColor = surface * (0.50 + 0.55 * diff) * limb * listenBoost
+                        + mix(vColor, vec3(1.0), 0.45) * spec * 0.20;
+
+        vec3 color = solidColor;
+
+        if (role > 0.5 && role < 1.5) {
+          // Role 1: Selected artist or Lens-matched artist — bright, saturated, solid 3D sphere
+          color = surface * (0.58 + 0.54 * diff) * (0.68 + 0.32 * pow(ndotv, 0.5))
+                + mix(vColor, vec3(1.0, 0.98, 0.92), 0.5) * spec * 0.28;
+        } else if (role >= 1.5) {
+          // Role 2: Collaborator / connected artist — vivid solid 3D sphere
+          color = surface * (0.54 + 0.52 * diff) * (0.65 + 0.35 * pow(ndotv, 0.5))
+                + mix(vColor, vec3(1.0), 0.45) * spec * 0.24;
+        } else if (focus < 0.65) {
+          // Unselected background planet: solid dark-matte sphere so foreground planets pop out against it
+          color = surface * (0.20 + 0.28 * diff) * limb * 0.42;
+        }
+
+        // Crisp black border around each sphere silhouette so light-colored clusters are easy to distinguish
+        float luma = dot(vColor, vec3(0.299, 0.587, 0.114));
+        float maxCh = max(vColor.r, max(vColor.g, vColor.b));
+        float isLight = smoothstep(0.30, 0.55, max(luma, maxCh * 0.82));
+
+        float radial = sqrt(max(0.0, 1.0 - ndotv * ndotv));
+        float px = max(0.015, fwidth(radial));
+        float borderWidth = mix(0.05, 0.115, isLight) + px * 1.45;
+        float borderMask = smoothstep(1.0 - borderWidth - px * 0.85, 1.0 - borderWidth + px * 0.35, radial);
+        vec3 borderColor = vec3(0.012, 0.015, 0.025);
+        color = mix(color, borderColor, borderMask * mix(0.70, 0.96, isLight));
+
+        gl_FragColor = vec4(color, 1.0);
       }
     `
   });
@@ -96,22 +115,28 @@ export function createPlanetMaterial() {
 
 /**
  * Song Moon Crystal Material (InstancedMesh over IcosahedronGeometry(1, 0)):
- * Visually differentiates songs from artist planets by rendering songs as crisp,
- * flat-shaded faceted crystals in their parent artist's exact color (vColor) without any glow.
+ * 100% OPAQUE (`transparent: false, depthWrite: true`) faceted 3D crystals in their
+ * parent artist's exact color (`vColor`), with a crisp black border on light-colored
+ * clusters so individual crystal moons stand out clearly against overlapping nodes.
  */
 export function createMoonCrystalMaterial() {
   return new THREE.ShaderMaterial({
-    transparent: true,
+    transparent: false,
+    depthWrite: true,
+    depthTest: true,
     vertexShader: /* glsl */ `
       attribute vec3 aMoonInfo;
       varying vec3 vNormal;
+      varying vec3 vRadialNormal;
       varying vec3 vViewPosition;
       varying vec3 vColor;
       varying vec3 vMoonInfo;
       varying vec4 vClipPos;
 
       void main() {
-        vNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);
+        mat3 instMat3 = mat3(instanceMatrix);
+        vNormal = normalize(normalMatrix * instMat3 * normal);
+        vRadialNormal = normalize(normalMatrix * instMat3 * normalize(position));
         vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
         vViewPosition = -mvPosition.xyz;
         vColor = instanceColor;
@@ -122,6 +147,7 @@ export function createMoonCrystalMaterial() {
     `,
     fragmentShader: /* glsl */ `
       varying vec3 vNormal;
+      varying vec3 vRadialNormal;
       varying vec3 vViewPosition;
       varying vec3 vColor;
       varying vec3 vMoonInfo;
@@ -129,47 +155,52 @@ export function createMoonCrystalMaterial() {
 
       void main() {
         float focus = vMoonInfo.x;
-
-        // Compute geometric face normal via screen-space derivatives for crisp flat-shaded crystal facets
-        vec3 fdx = dFdx(vViewPosition);
-        vec3 fdy = dFdy(vViewPosition);
-        vec3 faceNormal = normalize(cross(fdx, fdy));
-        vec3 normal = normalize(mix(vNormal, faceNormal, 0.9));
-
-        vec3 viewDir = normalize(vViewPosition);
-        vec3 lightDir = normalize(vec3(0.5, 0.8, 0.6));
-
-        float facetDiff = max(0.25, dot(normal, lightDir));
-        vec3 halfVec = normalize(lightDir + viewDir);
-        float spec = pow(max(0.0, dot(normal, halfVec)), 22.0);
-        float rim = pow(1.0 - max(0.0, dot(normal, viewDir)), 2.4);
-
-        vec3 baseShaded = vColor * (0.42 + 0.65 * facetDiff)
-                        + mix(vColor, vec3(1.0), 0.35) * spec * 0.45
-                        + vColor * rim * 0.35;
+        if (focus < 0.05) {
+          discard;
+        }
 
         float camDist = length(vViewPosition);
         vec2 ndc = vClipPos.xy / max(0.001, vClipPos.w);
-        float centerDist = length(ndc);
-        vec3 color = baseShaded;
-        float alpha = 1.0;
-
-        if (focus > 1.05) {
-          // Focused artist's song moons: crisp, saturated parent-artist color with sharp crystal facets
-          color = vColor * (0.48 + 0.65 * facetDiff) + mix(vColor, vec3(1.0), 0.28) * spec * 0.5;
-          alpha = 1.0;
-        } else if (focus < 0.75) {
-          // Unselected moon: keep RGB color intact and dim via alpha so it stays faintly visible
-          color = baseShaded * 0.75;
-          float baseAlpha = clamp(focus * 1.35, 0.18, 0.55);
-          float lineOfSightFade = mix(0.35, 1.0, smoothstep(0.0, 0.42, centerDist));
-          float nearCameraFade = smoothstep(5.0, 30.0, camDist);
-          alpha = clamp(baseAlpha * lineOfSightFade * nearCameraFade, 0.06, 0.55);
-        } else {
-          alpha = smoothstep(3.0, 14.0, camDist);
+        if (focus < 0.65 && camDist < 24.0 && length(ndc) < 0.35) {
+          discard;
         }
 
-        gl_FragColor = vec4(color, alpha);
+        vec3 fdx = dFdx(vViewPosition);
+        vec3 fdy = dFdy(vViewPosition);
+        vec3 faceNormal = normalize(cross(fdx, fdy));
+        vec3 normal = normalize(mix(vNormal, faceNormal, 0.92));
+
+        vec3 viewDir = normalize(vViewPosition);
+        vec3 lightDir = normalize(vec3(0.45, 0.78, 0.58));
+
+        float facetDiff = max(0.32, dot(normal, lightDir));
+        vec3 halfVec = normalize(lightDir + viewDir);
+        float spec = pow(max(0.0, dot(normal, halfVec)), 22.0);
+
+        vec3 color = vColor * (0.52 + 0.62 * facetDiff)
+                   + mix(vColor, vec3(1.0), 0.42) * spec * 0.36;
+
+        if (focus > 1.05) {
+          color = vColor * (0.60 + 0.60 * facetDiff)
+                + mix(vColor, vec3(1.0), 0.45) * spec * 0.42;
+        } else if (focus < 0.65) {
+          color = vColor * (0.22 + 0.28 * facetDiff) * 0.42;
+        }
+
+        // Crisp black silhouette border on light-colored clusters so crystal moons are distinct
+        float luma = dot(vColor, vec3(0.299, 0.587, 0.114));
+        float maxCh = max(vColor.r, max(vColor.g, vColor.b));
+        float isLight = smoothstep(0.30, 0.55, max(luma, maxCh * 0.82));
+
+        float ndotvRadial = max(0.0, dot(normalize(vRadialNormal), viewDir));
+        float radial = sqrt(max(0.0, 1.0 - ndotvRadial * ndotvRadial));
+        float px = max(0.02, fwidth(radial));
+        float borderWidth = mix(0.06, 0.14, isLight) + px * 1.4;
+        float borderMask = smoothstep(1.0 - borderWidth - px * 0.85, 1.0 - borderWidth + px * 0.35, radial);
+        vec3 borderColor = vec3(0.012, 0.015, 0.025);
+        color = mix(color, borderColor, borderMask * mix(0.68, 0.95, isLight));
+
+        gl_FragColor = vec4(color, 1.0);
       }
     `
   });

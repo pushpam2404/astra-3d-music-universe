@@ -470,7 +470,6 @@ export class Hud {
         const swatch = document.createElement('span');
         swatch.className = 'cluster-swatch';
         swatch.style.background = sun.color;
-        swatch.style.boxShadow = `0 0 10px ${sun.color}`;
         const text = document.createElement('span');
         const name = document.createElement('span');
         name.className = 'cluster-name';

@@ -24,8 +24,8 @@ export function createUniverseScene(canvasContainer) {
   });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(maxPixelRatio());
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.1;
+  renderer.toneMapping = THREE.NeutralToneMapping;
+  renderer.toneMappingExposure = 1.05;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   canvasContainer.appendChild(renderer.domElement);

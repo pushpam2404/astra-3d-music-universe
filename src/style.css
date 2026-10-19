@@ -583,10 +583,11 @@ input {
 }
 
 .cluster-swatch {
-  width: 10px;
-  height: 10px;
+  width: 11px;
+  height: 11px;
   margin-top: 6px;
   border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.88);
 }
 
 .cluster-name {
@@ -933,9 +934,10 @@ button.chip:hover {
 }
 
 .chip-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.85);
 }
 
 .song-list {
@@ -1140,9 +1142,10 @@ button.chip:hover {
 }
 
 .label-dot {
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.88);
   flex: none;
 }
 

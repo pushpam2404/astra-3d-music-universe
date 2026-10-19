@@ -9,8 +9,16 @@
  *   no genre data, shared home   → "Pakistani Scene"
  *   nothing to go on             → "Atif Aslam & Co." (named after its biggest artist)
  */
-import { familyInfo, OTHER_FAMILY, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
+import {
+  familyInfo,
+  OTHER_FAMILY,
+  UNCLASSIFIED_FAMILY,
+  CLUSTER_COLORS,
+  getDistinctClusterColor
+} from '../src/config/genreTaxonomy.js';
 import { DEMONYMS, PLACE_TAGS } from './places.js';
+
+export { CLUSTER_COLORS };
 
 // Genres so broad that they only name a cluster when nothing more specific exists.
 const BROAD_GENRES = new Set(['pop', 'rock', 'world', 'music', 'singer songwriter', 'soundtrack', 'electronic', 'dance', 'instrumental', 'vocal']);
@@ -19,38 +27,10 @@ const PLACE_WORDS = /\b(indian|punjabi|pakistani|hindi|urdu|filmi|bollywood|desi
 
 // Longer names crowd the 3D labels; shorter candidates win when available.
 const MAX_NAME_LENGTH = 28;
-const FALLBACK_PALETTE = ['#7BA7C2', '#D495A7', '#A892C4', '#82B8A0', '#D9B67E', '#8C9EC9', '#C796B8', '#8ABCB9'];
 const UNCHARTED_COLOR = '#6E768C';
 
 const CASE_FIXES = [[/\bR&b\b/g, 'R&B'], [/\bEdm\b/g, 'EDM'], [/\bUk\b/g, 'UK'], [/\bUs\b/g, 'US'], [/\bLo Fi\b/g, 'Lo-Fi'], [/\bK Pop\b/g, 'K-Pop'], [/\bJ Pop\b/g, 'J-Pop'], [/\bDnb\b/g, 'DnB'], [/\bIdm\b/g, 'IDM']];
 export const titleCase = (s) => CASE_FIXES.reduce((t, [re, rep]) => t.replace(re, rep), s.replace(/\b([a-z])/g, (m) => m.toUpperCase()));
-
-function hexToHsl(hex) {
-  const v = parseInt(hex.slice(1), 16);
-  const r = ((v >> 16) & 255) / 255, g = ((v >> 8) & 255) / 255, b = (v & 255) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  if (max === min) return [0, 0, l];
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return [h * 60, s, l];
-}
-
-function hslToHex(h, s, l) {
-  const k = (x) => (x + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (x) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(x) - 3, Math.min(9 - k(x), 1)))));
-  return `#${[f(0), f(8), f(4)].map(v => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-}
-
-/** Shifts the hue while preserving a refined, muted-luxury saturation and lightness. */
-function variantColor(hex, variantIndex) {
-  if (variantIndex === 0) return hex;
-  const [h, s, l] = hexToHsl(hex);
-  const step = Math.ceil(variantIndex / 2) * 18 * (variantIndex % 2 ? 1 : -1);
-  return hslToHex((h + step + 360) % 360, Math.min(0.58, s), Math.min(0.68, Math.max(0.52, l + 0.03)));
-}
 
 /** "Psychedelic Rock" + "Indie Rock" → "Psychedelic & Indie Rock"; otherwise "A & B". */
 function joinGenres(a, b) {
@@ -91,15 +71,13 @@ export function describeClusters(clusters, uncharted, byId, n) {
   countryKnownN = Math.max(1, countryKnownN || n);
 
   const usedNames = new Set();
-  const familyUse = new Map();
-  let fallbackColor = 0;
   const described = [];
 
   const sortedClusters = clusters
     .slice()
     .sort((A, B) => B.reduce((s, id) => s + scoreOf(id), 0) - A.reduce((s, id) => s + scoreOf(id), 0));
 
-  sortedClusters.forEach(members => {
+  sortedClusters.forEach((members, clusterIdx) => {
     const genreRichSize = Math.max(1, members.filter(id => byId.get(id).genres?.length).length);
     const countryRichSize = Math.max(1, members.filter(id => byId.get(id).countries?.length).length);
     const famScore = {};
@@ -150,17 +128,10 @@ export function describeClusters(clusters, uncharted, byId, n) {
       || `${topArtists[0]} & Co. ${described.length + 1}`;
     usedNames.add(name.toLowerCase());
 
-    // Color: family color (hue-shifted per repeat); genre-less clusters get a distinct fallback hue.
+    // Family stays as a metadata/text label; each cluster gets a unique maximally-distant color in size order
     const familyId = Object.entries(famScore).sort((x, y) => y[1] - x[1])[0]?.[0];
     const family = familyId ? familyInfo(familyId) : OTHER_FAMILY;
-    let color;
-    if (familyId) {
-      const variant = familyUse.get(family.id) || 0;
-      familyUse.set(family.id, variant + 1);
-      color = variantColor(family.color, variant);
-    } else {
-      color = FALLBACK_PALETTE[fallbackColor++ % FALLBACK_PALETTE.length];
-    }
+    const color = getDistinctClusterColor(clusterIdx);
 
     described.push({
       id: `cluster_${described.length}_${family.id}`,

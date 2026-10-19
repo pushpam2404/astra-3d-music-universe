@@ -7,6 +7,7 @@ export const SolarPlasmaVertexShader = /* glsl */ `
   
   varying vec3 vNormal;
   varying vec3 vPosition;
+  varying vec3 vLocal;
   varying vec4 vClipPos;
   varying float vNoise;
 
@@ -59,17 +60,17 @@ export const SolarPlasmaVertexShader = /* glsl */ `
   }
 
   void main() {
+    vLocal = normalize(position);
     vNormal = normalize(normalMatrix * normal);
-    
-    float n1 = snoise(position * 0.45 + vec3(uTime * 0.35));
-    float n2 = 0.5 * snoise(position * 0.9 - vec3(uTime * 0.6));
+
+    // Subtle surface banding noise without vertex displacement so the planet silhouette & border stay razor-sharp
+    float n1 = snoise(vLocal * 2.2 + vec3(uTime * 0.08));
+    float n2 = 0.5 * snoise(vLocal * 4.5 - vec3(uTime * 0.12));
     vNoise = (n1 + n2);
 
-    float displacement = vNoise * (0.04 + 0.07 * uEnergy);
-    vec3 newPosition = position + normal * displacement;
-    vPosition = (modelViewMatrix * vec4(newPosition, 1.0)).xyz;
-
-    gl_Position = projectionMatrix * vec4(vPosition, 1.0);
+    vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+    vPosition = mvPos.xyz;
+    gl_Position = projectionMatrix * mvPos;
     vClipPos = gl_Position;
   }
 `;
@@ -81,26 +82,52 @@ export const SolarPlasmaFragmentShader = /* glsl */ `
   
   varying vec3 vNormal;
   varying vec3 vPosition;
+  varying vec3 vLocal;
   varying vec4 vClipPos;
   varying float vNoise;
 
   void main() {
-    vec3 viewDir = normalize(-vPosition);
-    float ndotv = max(0.0, dot(vNormal, viewDir));
-
-    // Radial star glow: warm luminous core that feathers smoothly toward the edge
-    // so cluster centers shine like stars without ever forming a hard-edged opaque blocker!
-    float coreShine = pow(ndotv, 1.85);
-    float softHalo = pow(ndotv, 0.85);
-    float heat = smoothstep(-0.4, 0.85, vNoise) * 0.38;
-
-    vec3 starColor = mix(uPrimaryColor, uCoreColor, coreShine * 0.52 + heat * 0.25);
-
     float camDist = length(vPosition);
-    float nearFade = smoothstep(8.0, 48.0, camDist);
-    float alpha = softHalo * clamp(uOpacity, 0.12, 0.88) * nearFade;
+    vec2 ndc = vClipPos.xy / max(0.001, vClipPos.w);
+    if (uOpacity < 0.55 && camDist < 28.0 && length(ndc) < 0.38) {
+      discard;
+    }
 
-    gl_FragColor = vec4(starColor * (0.75 + 0.55 * coreShine), alpha);
+    vec3 normal = normalize(vNormal);
+    vec3 viewDir = normalize(-vPosition);
+    float ndotv = max(0.0, dot(normal, viewDir));
+
+    // Solid, non-glowing central cluster planet with subtle atmospheric bands
+    vec3 keyLight = normalize(vec3(0.42, 0.72, 0.55));
+    float diff = smoothstep(-0.18, 0.95, dot(normal, keyLight));
+    vec3 halfVec = normalize(keyLight + viewDir);
+    float spec = pow(max(0.0, dot(normal, halfVec)), 30.0);
+
+    float bands = sin(vLocal.y * 9.0 + vNoise * 1.4);
+    vec3 surface = uPrimaryColor * (0.94 + 0.06 * bands + 0.04 * vNoise);
+    float limb = 0.62 + 0.38 * pow(ndotv, 0.52);
+
+    vec3 planetColor = surface * (0.50 + 0.54 * diff) * limb
+                     + mix(uPrimaryColor, vec3(1.0), 0.45) * spec * 0.18;
+
+    // Dim cleanly when unselected without turning translucent or glowing
+    if (uOpacity < 0.65) {
+      planetColor *= mix(0.28, 0.85, clamp(uOpacity, 0.0, 1.0));
+    }
+
+    // Crisp black border around the silhouette (strongest on light-colored clusters so they stand out clearly)
+    float luma = dot(uPrimaryColor, vec3(0.299, 0.587, 0.114));
+    float maxCh = max(uPrimaryColor.r, max(uPrimaryColor.g, uPrimaryColor.b));
+    float isLight = smoothstep(0.30, 0.55, max(luma, maxCh * 0.82));
+
+    float radial = sqrt(max(0.0, 1.0 - ndotv * ndotv));
+    float px = max(0.012, fwidth(radial));
+    float borderWidth = mix(0.045, 0.095, isLight) + px * 1.3;
+    float borderMask = smoothstep(1.0 - borderWidth - px * 0.85, 1.0 - borderWidth + px * 0.35, radial);
+    vec3 borderColor = vec3(0.015, 0.018, 0.03);
+    planetColor = mix(planetColor, borderColor, borderMask * mix(0.68, 0.96, isLight));
+
+    gl_FragColor = vec4(planetColor, 1.0);
   }
 `;
 
@@ -108,9 +135,10 @@ export function createSolarShaderMaterial(hexColor, energy = 0.8) {
   return new THREE.ShaderMaterial({
     vertexShader: SolarPlasmaVertexShader,
     fragmentShader: SolarPlasmaFragmentShader,
-    transparent: true,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    transparent: false,
+    depthWrite: true,
+    depthTest: true,
+    blending: THREE.NormalBlending,
     uniforms: {
       uTime: { value: 0.0 },
       uEnergy: { value: energy },

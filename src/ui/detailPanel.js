@@ -253,9 +253,14 @@ export class DetailPanel {
       { id: 'past_fav', label: 'Past favs' },
       { id: 'dormant', label: 'Dormant' },
       { id: 'current_rotation', label: 'Current' },
+      { id: 'all_time_staple', label: 'Staples' },
+      { id: 'era_2026', label: '2026' },
+      { id: 'early_2025', label: 'Early 2025' },
       { id: 'era_2025', label: '2025' },
+      { id: 'early_2024', label: 'Early 2024' },
       { id: 'era_2024', label: '2024' },
-      { id: 'era_2023', label: '2023' }
+      { id: 'era_2023', label: '2023' },
+      { id: 'era_2020_2022', label: '2020–22' }
     ];
 
     const modeArtistsBtn = el('button', { type: 'button', class: 'sub-tab is-active', text: `Artists (${artists.length})` });
@@ -306,7 +311,14 @@ export class DetailPanel {
         class: `mini-pill${f.id === filter ? ' is-active' : ''}`,
         'data-filter': f.id,
         text: f.label,
-        onclick: () => { filter = f.id; renderExplorer(); }
+        onclick: () => {
+          filter = f.id;
+          if (this.ctx.onSetLens && this.ctx.getActiveLens?.() !== f.id) {
+            this.ctx.onSetLens(f.id);
+          } else {
+            renderExplorer();
+          }
+        }
       });
       filterRow.append(btn);
     });
