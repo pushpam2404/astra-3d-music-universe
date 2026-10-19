@@ -7,6 +7,7 @@ export const SolarPlasmaVertexShader = /* glsl */ `
   
   varying vec3 vNormal;
   varying vec3 vPosition;
+  varying vec4 vClipPos;
   varying float vNoise;
 
   vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -54,22 +55,22 @@ export const SolarPlasmaVertexShader = /* glsl */ `
     p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
     vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
     m = m * m;
-    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,p3)));
+    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
   }
 
   void main() {
     vNormal = normalize(normalMatrix * normal);
     
-    // Two-octave turbulent noise driven by time and genre energy
-    float n1 = snoise(position * 0.45 + vec3(uTime * 0.4));
-    float n2 = 0.5 * snoise(position * 0.9 - vec3(uTime * 0.7));
+    float n1 = snoise(position * 0.45 + vec3(uTime * 0.35));
+    float n2 = 0.5 * snoise(position * 0.9 - vec3(uTime * 0.6));
     vNoise = (n1 + n2);
 
-    float displacement = vNoise * (0.05 + 0.12 * uEnergy);
+    float displacement = vNoise * (0.04 + 0.07 * uEnergy);
     vec3 newPosition = position + normal * displacement;
     vPosition = (modelViewMatrix * vec4(newPosition, 1.0)).xyz;
 
     gl_Position = projectionMatrix * vec4(vPosition, 1.0);
+    vClipPos = gl_Position;
   }
 `;
 
@@ -80,18 +81,26 @@ export const SolarPlasmaFragmentShader = /* glsl */ `
   
   varying vec3 vNormal;
   varying vec3 vPosition;
+  varying vec4 vClipPos;
   varying float vNoise;
 
   void main() {
     vec3 viewDir = normalize(-vPosition);
-    float fresnel = pow(1.0 - max(0.0, dot(vNormal, viewDir)), 2.2);
+    float ndotv = max(0.0, dot(vNormal, viewDir));
 
-    // Blend between deep genre color and white-hot solar filaments
-    float heat = smoothstep(-0.4, 0.8, vNoise);
-    vec3 surfaceColor = mix(uPrimaryColor * 0.7, uCoreColor, heat);
-    vec3 finalColor = (surfaceColor + (uPrimaryColor * fresnel * 1.6)) * uOpacity;
+    // Radial star glow: warm luminous core that feathers smoothly toward the edge
+    // so cluster centers shine like stars without ever forming a hard-edged opaque blocker!
+    float coreShine = pow(ndotv, 1.85);
+    float softHalo = pow(ndotv, 0.85);
+    float heat = smoothstep(-0.4, 0.85, vNoise) * 0.38;
 
-    gl_FragColor = vec4(finalColor, uOpacity);
+    vec3 starColor = mix(uPrimaryColor, uCoreColor, coreShine * 0.52 + heat * 0.25);
+
+    float camDist = length(vPosition);
+    float nearFade = smoothstep(8.0, 48.0, camDist);
+    float alpha = softHalo * clamp(uOpacity, 0.12, 0.88) * nearFade;
+
+    gl_FragColor = vec4(starColor * (0.75 + 0.55 * coreShine), alpha);
   }
 `;
 
@@ -100,12 +109,14 @@ export function createSolarShaderMaterial(hexColor, energy = 0.8) {
     vertexShader: SolarPlasmaVertexShader,
     fragmentShader: SolarPlasmaFragmentShader,
     transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
     uniforms: {
       uTime: { value: 0.0 },
       uEnergy: { value: energy },
       uOpacity: { value: 1.0 },
       uPrimaryColor: { value: new THREE.Color(hexColor) },
-      uCoreColor: { value: new THREE.Color('#FFFFFF') }
+      uCoreColor: { value: new THREE.Color('#FFF6E0') }
     }
   });
 }

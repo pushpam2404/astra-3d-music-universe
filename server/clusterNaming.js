@@ -19,8 +19,8 @@ const PLACE_WORDS = /\b(indian|punjabi|pakistani|hindi|urdu|filmi|bollywood|desi
 
 // Longer names crowd the 3D labels; shorter candidates win when available.
 const MAX_NAME_LENGTH = 28;
-const FALLBACK_PALETTE = ['#7FD1FF', '#FFB3C7', '#C9A2FF', '#9EF0C4', '#FFD59E', '#A3B8FF', '#F7A8FF', '#B8F2E6'];
-const UNCHARTED_COLOR = '#6B7290';
+const FALLBACK_PALETTE = ['#7BA7C2', '#D495A7', '#A892C4', '#82B8A0', '#D9B67E', '#8C9EC9', '#C796B8', '#8ABCB9'];
+const UNCHARTED_COLOR = '#6E768C';
 
 const CASE_FIXES = [[/\bR&b\b/g, 'R&B'], [/\bEdm\b/g, 'EDM'], [/\bUk\b/g, 'UK'], [/\bUs\b/g, 'US'], [/\bLo Fi\b/g, 'Lo-Fi'], [/\bK Pop\b/g, 'K-Pop'], [/\bJ Pop\b/g, 'J-Pop'], [/\bDnb\b/g, 'DnB'], [/\bIdm\b/g, 'IDM']];
 export const titleCase = (s) => CASE_FIXES.reduce((t, [re, rep]) => t.replace(re, rep), s.replace(/\b([a-z])/g, (m) => m.toUpperCase()));
@@ -44,12 +44,12 @@ function hslToHex(h, s, l) {
   return `#${[f(0), f(8), f(4)].map(v => v.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
 }
 
-/** Shifts the hue so clusters of the same family stay distinguishable. */
+/** Shifts the hue while preserving a refined, muted-luxury saturation and lightness. */
 function variantColor(hex, variantIndex) {
   if (variantIndex === 0) return hex;
   const [h, s, l] = hexToHsl(hex);
-  const step = Math.ceil(variantIndex / 2) * 22 * (variantIndex % 2 ? 1 : -1);
-  return hslToHex((h + step + 360) % 360, s, Math.min(0.72, l + 0.04));
+  const step = Math.ceil(variantIndex / 2) * 18 * (variantIndex % 2 ? 1 : -1);
+  return hslToHex((h + step + 360) % 360, Math.min(0.58, s), Math.min(0.68, Math.max(0.52, l + 0.03)));
 }
 
 /** "Psychedelic Rock" + "Indie Rock" → "Psychedelic & Indie Rock"; otherwise "A & B". */

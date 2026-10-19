@@ -305,11 +305,12 @@ async function initApp() {
 
   /** Closest visible sun, artist, or song moon on screen within `radius` px. */
   function pickNearest(x, y, radius, isTouch = false) {
-    let best = null, bestD = radius;
+    let bestFocused = null, bestFocusedD = radius;
+    let bestAny = null, bestAnyD = radius;
     const v = new THREE.Vector3();
     const hasLens = AppState.activeLens && AppState.activeLens !== 'all';
     for (const n of AppState.nodes) {
-      if (!n.position || n.meshGroup?.visible === false || (n.focusLevel ?? 1) < 0.08 || (n.focusTarget ?? 1) === 0) continue;
+      if (!n.position || n.meshGroup?.visible === false) continue;
       if (n.type === 'artist' && !AppState.layers.artists) continue;
       if (n.type === 'track') {
         if (!AppState.layers.tracks) continue;
@@ -319,16 +320,24 @@ async function initApp() {
       v.copy(n.position).project(camera);
       if (v.z > 1) continue;
       const d = Math.hypot((v.x + 1) / 2 * window.innerWidth - x, (1 - v.y) / 2 * window.innerHeight - y);
-      if (d < bestD) { bestD = d; best = n; }
+      const isFocusedNode = (n.focusTarget ?? 1) >= 0.5;
+      if (isFocusedNode && d < bestFocusedD) {
+        bestFocusedD = d;
+        bestFocused = n;
+      }
+      if (d < bestAnyD) {
+        bestAnyD = d;
+        bestAny = n;
+      }
     }
-    return best;
+    return bestFocused || bestAny;
   }
 
   function pickNode(isTouch = false) {
     raycaster.setFromCamera(pointer, camera);
     const interactiveMeshes = [];
     AppState.nodes.forEach(n => {
-      if (n.sphereMesh && n.meshGroup?.visible && (n.focusLevel ?? 1) >= 0.08 && (n.focusTarget ?? 1) > 0) {
+      if (n.sphereMesh && n.meshGroup?.visible) {
         interactiveMeshes.push(n.sphereMesh);
       }
     });
@@ -339,16 +348,19 @@ async function initApp() {
       interactiveMeshes.push(factory.trackMesh);
     }
 
-    // Filter out invisible objects before checking intersections
+    // Filter out invisible objects and prioritize focused nodes over dimmed transparent ones passing in front
     const pickableTargets = interactiveMeshes.filter((m) => m.visible);
     const hits = raycaster.intersectObjects(pickableTargets, false);
+    let fallbackDimmed = null;
     for (const hit of hits) {
       const node = factory.nodeFromHit(hit);
-      if (node && node.meshGroup?.visible !== false && (node.focusLevel ?? 1) >= 0.08 && (node.focusTarget ?? 1) > 0) {
+      if (!node || node.meshGroup?.visible === false) continue;
+      if ((node.focusTarget ?? 1) >= 0.5) {
         return node;
       }
+      if (!fallbackDimmed) fallbackDimmed = node;
     }
-    return null;
+    return fallbackDimmed;
   }
 
   // ---------- Building a universe ----------
@@ -593,10 +605,11 @@ async function initApp() {
     labelProjector.update(
       AppState.nodes,
       camera,
-      AppState.selectedNode || AppState.hoveredNode,
+      AppState.selectedNode,
       AppState.nodeScaleMultiplier,
       AppState.layers.labels,
-      AppState.activeLens
+      AppState.activeLens,
+      AppState.hoveredNode
     );
     composer.render();
   }

@@ -18,7 +18,7 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<
  *  - Genre Suns (italic serif cluster title + count)
  *  - Primary Selected Artist (solid bright pill with a `PRIMARY` glow border & badge)
  *  - Collaborator Artists (cyan dashed `COLLAB` pill badge: `border: 1px dashed #38bdf8; color: #7dd3fc`)
- *  - Song Moons (`♪` crystal icon + faceted pill styling so songs never look like artists)
+ *  - Song Moons (`◆ ♪` crystal icon + faceted pill styling so songs never look like artists)
  */
 export class LabelProjector {
   constructor(containerEl) {
@@ -112,50 +112,69 @@ export class LabelProjector {
     }
   }
 
-  priorityOf(node, activeNode, activeLens = 'all') {
+  priorityOf(node, selectedNode, hoveredNode = null, activeLens = 'all') {
+    // Always show the hovered node's label at top priority so hovering any planet/moon identifies it
+    if (hoveredNode && node.id === hoveredNode.id) return 0;
+
     const hasLens = Boolean(activeLens && activeLens !== 'all');
     const matchesLens = hasLens ? nodeMatchesLens(node, activeLens) : true;
 
-    if (activeNode) {
-      if (node.id === activeNode.id) return 0;
+    if (selectedNode) {
+      if (node.id === selectedNode.id) return 0;
 
-      // Artist Isolation Mode: hide other clusters & unrelated nodes; show artist + collaborators + songs
-      if (activeNode.type === 'artist') {
+      // Artist Focus Mode: show selected artist + collaborators + songs
+      if (selectedNode.type === 'artist') {
         if (node.type === 'genre') return -1;
-        if (node.type === 'artist' && activeNode.collaboratorArtistIds?.has(node.id)) {
+        if (node.type === 'artist' && selectedNode.collaboratorArtistIds?.has(node.id)) {
           return 1;
         }
-        if (node.type === 'track' && activeNode.neighbors?.has(node.id)) {
-          if (activeNode.collabTrackIds?.has(node.id) || node.featArtistIds?.length) return 1.4;
+        if (node.type === 'track' && selectedNode.neighbors?.has(node.id)) {
+          if (selectedNode.collabTrackIds?.has(node.id) || node.featArtistIds?.length) return 1.4;
           if (hasLens && matchesLens) return 1.6;
           return 2.0;
         }
         return -1;
       }
 
-      // Song Isolation Mode: show song, primary artist, and collaborating artists
-      if (activeNode.type === 'track') {
+      // Song Focus Mode: show song, primary artist, and collaborating artists
+      if (selectedNode.type === 'track') {
         if (node.type === 'genre') return -1;
-        if (node.type === 'artist' && activeNode.neighbors?.has(node.id)) return 1;
+        if (node.type === 'artist' && selectedNode.neighbors?.has(node.id)) return 1;
         return -1;
       }
 
       // Cluster Focus Mode
-      if (activeNode.neighbors?.has(node.id)) {
+      if (selectedNode.neighbors?.has(node.id)) {
         if (node.type === 'genre') return 1;
         if (hasLens && matchesLens) return 1.5;
         return node.type === 'artist' ? 2 : 2.5;
       }
-      if (activeNode.type === 'genre' && node.type === 'track' && node.connectedGenres?.includes(activeNode.name)) {
+      if (selectedNode.type === 'genre' && node.type === 'track' && node.connectedGenres?.includes(selectedNode.name)) {
         if (hasLens && matchesLens && (node.normScore ?? 0) > 0.35) return 2.8;
         if (!hasLens && (node.normScore ?? 0) > 0.72) return 3.2;
       }
       return -1;
     }
 
+    // If hovering a song or artist in overview/lens mode, also label its immediate artist/collaborators
+    if (hoveredNode) {
+      if (hoveredNode.type === 'track' && node.type === 'artist' && hoveredNode.neighbors?.has(node.id)) {
+        return 0.5;
+      }
+      if (hoveredNode.type === 'artist' && node.type === 'artist' && hoveredNode.collaboratorArtistIds?.has(node.id)) {
+        return 0.8;
+      }
+    }
+
     if (hasLens) {
       if (node.type === 'genre') return 2.5;
-      if (!matchesLens) return -1;
+      if (!matchesLens) {
+        // Also allow labels for artists who collaborated on a lens-matched song and are lit up
+        if (node.type === 'artist' && (node.focusTarget ?? 0) >= 0.85 && (node.globalRank ?? 999) < 80) {
+          return 2.2;
+        }
+        return -1;
+      }
       if (node.type === 'artist') {
         if ((node.globalRank ?? 999) < 40 || (node.normScore ?? 0) > 0.45) return 1;
         return 2;
@@ -176,7 +195,7 @@ export class LabelProjector {
     return -1;
   }
 
-  update(nodes, camera, activeNode, scaleMultiplier = 1.0, labelsVisible = true, activeLens = 'all') {
+  update(nodes, camera, selectedNode, scaleMultiplier = 1.0, labelsVisible = true, activeLens = 'all', hoveredNode = null) {
     if (!labelsVisible) {
       this.container.style.display = 'none';
       return;
@@ -187,11 +206,13 @@ export class LabelProjector {
     const h = window.innerHeight;
     const candidates = [];
     const hasLens = Boolean(activeLens && activeLens !== 'all');
+    const activeNode = selectedNode;
 
     for (const node of nodes) {
       if (node.meshGroup && !node.meshGroup.visible) continue;
-      if ((node.focusLevel ?? 1) < 0.08 || (node.focusTarget ?? 1) === 0) continue;
-      const priority = this.priorityOf(node, activeNode, activeLens);
+      const isHovered = Boolean(hoveredNode && node.id === hoveredNode.id);
+      if (!isHovered && ((node.focusLevel ?? 1) < 0.08 || (node.focusTarget ?? 1) === 0)) continue;
+      const priority = this.priorityOf(node, selectedNode, hoveredNode, activeLens);
       if (priority < 0) continue;
 
       tempProjVec.copy(node.position);
@@ -222,7 +243,7 @@ export class LabelProjector {
         (activeNode?.type === 'artist' && c.node.type === 'artist' && c.node.id !== activeNode.id) ||
         (activeNode?.type === 'track' && c.node.type === 'artist' && c.node.id !== activeNode.artistId)
       );
-      const showBadge = hasLens || (activeNode && c.priority <= 2.8);
+      const showBadge = hasLens || (activeNode && c.priority <= 2.8) || (hoveredNode && c.priority <= 0.8);
       if (
         !c.node.labelSize ||
         c.node._measuredBadge !== showBadge ||
@@ -255,7 +276,7 @@ export class LabelProjector {
       c.x = placedAt.x;
       c.y = placedAt.y;
 
-      const focused = activeNode && (c.priority <= 2.5);
+      const focused = (activeNode && c.priority <= 2.5) || (hoveredNode && c.priority <= 0.8);
       const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.94'));
       this.show(
         c.el,

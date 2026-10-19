@@ -1133,10 +1133,10 @@ button.chip:hover {
 }
 
 .celestial-hud-label.is-collab {
-  background: rgba(8, 24, 38, 0.92);
-  border: 1px dashed #38bdf8;
-  box-shadow: 0 0 14px rgba(56, 189, 248, 0.32);
-  color: #7dd3fc;
+  background: rgba(18, 20, 34, 0.92);
+  border: 1px dashed rgba(244, 233, 200, 0.55);
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.45);
+  color: var(--starlight);
 }
 
 .label-dot {
@@ -1176,13 +1176,13 @@ button.chip:hover {
   font-family: var(--sans);
   font-style: normal;
   font-size: 9.5px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.04em;
   padding: 1px 5px;
   border-radius: 999px;
-  background: rgba(56, 189, 248, 0.16);
-  border: 1px dashed #38bdf8;
-  color: #7dd3fc;
+  background: rgba(244, 233, 200, 0.12);
+  border: 1px dashed rgba(244, 233, 200, 0.5);
+  color: var(--starlight);
 }
 
 .celestial-hud-label.is-collab .label-collab-badge {
