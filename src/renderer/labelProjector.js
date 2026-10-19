@@ -14,8 +14,11 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<
  * label that would overlap an already placed one is hidden, so the screen never
  * turns into a pile of text.
  *
- * When an Artist is selected, cluster labels fade away and only the selected artist,
- * their collaborating artists, and their song moons are labeled.
+ * Visually differentiates:
+ *  - Genre Suns (italic serif cluster title + count)
+ *  - Primary Selected Artist (solid bright pill with a `PRIMARY` glow border & badge)
+ *  - Collaborator Artists (cyan dashed `COLLAB` pill badge: `border: 1px dashed #38bdf8; color: #7dd3fc`)
+ *  - Song Moons (`♪` crystal icon + faceted pill styling so songs never look like artists)
  */
 export class LabelProjector {
   constructor(containerEl) {
@@ -45,10 +48,19 @@ export class LabelProjector {
     if (node.isWormholeBridge) el.classList.add('label-wormhole');
     if (node.isBridge) el.classList.add('label-bridge');
 
+    const leadIcon = node.type === 'track'
+      ? `<span class="label-song-icon" style="color:${node.color}">◆ ♪</span>`
+      : `<span class="label-dot" style="background:${node.color}"></span>`;
+
+    const roleBadges = node.type === 'artist'
+      ? `<span class="label-primary-badge">PRIMARY</span><span class="label-collab-badge">COLLAB</span>`
+      : '';
+
     const count = node.type === 'genre'
       ? `<span class="label-count">${node.neighbors?.size || 0}</span>`
       : (node.history?.shortBadge ? `<span class="label-era">${escapeHtml(node.history.shortBadge)}</span>` : '');
-    el.innerHTML = `<span class="label-dot" style="background:${node.color}"></span><span class="label-text">${escapeHtml(node.name)}</span>${count}`;
+
+    el.innerHTML = `${leadIcon}${roleBadges}<span class="label-text">${escapeHtml(node.name)}</span>${count}`;
     el.style.opacity = '0';
     el.style.pointerEvents = 'none';
     el._shown = false;
@@ -71,7 +83,7 @@ export class LabelProjector {
     el.style.pointerEvents = 'none';
   }
 
-  show(el, transform, opacity, focused, showBadge) {
+  show(el, transform, opacity, isMainFocused, isPrimaryArtist, isCollab, showBadge) {
     if (el._transform !== transform) {
       el._transform = transform;
       el.style.transform = transform;
@@ -82,9 +94,17 @@ export class LabelProjector {
     }
     if (!el._shown) el.style.pointerEvents = 'auto';
     el._shown = true;
-    if (el._focused !== focused) {
-      el._focused = focused;
-      el.classList.toggle('focused', focused);
+    if (el._focused !== isMainFocused) {
+      el._focused = isMainFocused;
+      el.classList.toggle('focused', isMainFocused);
+    }
+    if (el._isPrimary !== isPrimaryArtist) {
+      el._isPrimary = isPrimaryArtist;
+      el.classList.toggle('is-primary-artist', Boolean(isPrimaryArtist));
+    }
+    if (el._isCollab !== isCollab) {
+      el._isCollab = isCollab;
+      el.classList.toggle('is-collab', Boolean(isCollab));
     }
     if (el._showBadge !== showBadge) {
       el._showBadge = showBadge;
@@ -169,7 +189,9 @@ export class LabelProjector {
     const hasLens = Boolean(activeLens && activeLens !== 'all');
 
     for (const node of nodes) {
-      const priority = (node.meshGroup && !node.meshGroup.visible) ? -1 : this.priorityOf(node, activeNode, activeLens);
+      if (node.meshGroup && !node.meshGroup.visible) continue;
+      if ((node.focusLevel ?? 1) < 0.08 || (node.focusTarget ?? 1) === 0) continue;
+      const priority = this.priorityOf(node, activeNode, activeLens);
       if (priority < 0) continue;
 
       tempProjVec.copy(node.position);
@@ -192,11 +214,28 @@ export class LabelProjector {
     const shownNow = new Set();
 
     for (const c of candidates) {
+      const isPrimaryArtist = Boolean(
+        (activeNode?.type === 'artist' && c.node.id === activeNode.id) ||
+        (activeNode?.type === 'track' && c.node.type === 'artist' && c.node.id === activeNode.artistId)
+      );
+      const isCollab = Boolean(
+        (activeNode?.type === 'artist' && c.node.type === 'artist' && c.node.id !== activeNode.id) ||
+        (activeNode?.type === 'track' && c.node.type === 'artist' && c.node.id !== activeNode.artistId)
+      );
       const showBadge = hasLens || (activeNode && c.priority <= 2.8);
-      if (!c.node.labelSize || c.node._measuredBadge !== showBadge) {
+      if (
+        !c.node.labelSize ||
+        c.node._measuredBadge !== showBadge ||
+        c.node._measuredCollab !== isCollab ||
+        c.node._measuredPrimary !== isPrimaryArtist
+      ) {
         c.el.classList.toggle('with-badge', Boolean(showBadge));
+        c.el.classList.toggle('is-collab', isCollab);
+        c.el.classList.toggle('is-primary-artist', isPrimaryArtist);
         c.node.labelSize = { w: c.el.offsetWidth || 96, h: c.el.offsetHeight || 22 };
         c.node._measuredBadge = showBadge;
+        c.node._measuredCollab = isCollab;
+        c.node._measuredPrimary = isPrimaryArtist;
       }
       const { w: lw, h: lh } = c.node.labelSize;
       const spots = [[0, 0], [0, lh + 16], [lw / 2 + 14, lh / 2 + 8], [-(lw / 2 + 14), lh / 2 + 8]];
@@ -217,12 +256,14 @@ export class LabelProjector {
       c.y = placedAt.y;
 
       const focused = activeNode && (c.priority <= 2.5);
-      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.92'));
+      const opacity = c.priority === 0 ? '1' : (activeNode && !focused ? '0.45' : (c.node.type === 'genre' ? '0.95' : '0.94'));
       this.show(
         c.el,
         `translate(-50%, -100%) translate3d(${c.x.toFixed(0)}px, ${c.y.toFixed(0)}px, 0)`,
         opacity,
-        c.priority === 0 || (activeNode?.type === 'artist' && c.priority === 1),
+        c.priority === 0,
+        isPrimaryArtist,
+        isCollab,
         showBadge
       );
       shownNow.add(c.el);

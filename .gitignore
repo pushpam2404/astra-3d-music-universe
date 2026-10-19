@@ -43,3 +43,7 @@ lerna-debug.log*
 .vercel
 .env*
 !.env.example
+
+# Technical context & AI manual
+astra_context.md
+ASTRA_CONTEXT.md

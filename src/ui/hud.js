@@ -2,7 +2,8 @@
 /**
  * Everything around the galaxy: top bar (search, History import/export/source-toggle,
  * view settings, Spotify), the Time & Memory Lens bar, mobile camera controls,
- * the side panel (Clusters | Memories | Songs ⇄ Details), the caption and loading state.
+ * the side panel (Clusters | Memories | Songs ⇄ Details), the caption, enrichment
+ * status counter, and loading state.
  */
 import { SPOTIFY_LOGIN_URL, logout } from '../api/backendClient.js';
 import { nodeMatchesLens } from '../renderer/celestialFactory.js';
@@ -28,6 +29,41 @@ const LENS_DESCRIPTIONS = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+/**
+ * Updates the exact "Pending vs. Newly Enriched on Reload" HUD counter banner.
+ * Distinguishes between artists still waiting to be checked (`waitingCount`) and
+ * artists whose genres were newly resolved in the background (`readyOnReloadCount`).
+ */
+export function updateEnrichmentStatus({ waitingCount = 0, readyOnReloadCount = 0, onApply = null } = {}) {
+  const statusEl = document.getElementById('enrichment-status-banner');
+  if (!statusEl) return;
+
+  if (waitingCount === 0 && readyOnReloadCount === 0) {
+    statusEl.hidden = true;
+    statusEl.innerHTML = '';
+    return;
+  }
+
+  statusEl.hidden = false;
+  if (waitingCount > 0) {
+    statusEl.innerHTML = `
+      <span><strong>${waitingCount.toLocaleString()}</strong> artists waiting for info · 
+      <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists ready if you reload</span>
+      ${readyOnReloadCount > 0 ? '<button type="button" class="pill-action" data-enrich-reload>Apply now</button>' : ''}
+    `;
+  } else {
+    statusEl.innerHTML = `
+      <span>All artists checked · <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists will be placed into clusters on reload</span>
+      <button type="button" class="pill-action" data-enrich-reload>Reload to apply</button>
+    `;
+  }
+
+  const btn = statusEl.querySelector('[data-enrich-reload]');
+  if (btn) {
+    btn.onclick = typeof onApply === 'function' ? onApply : () => window.location.reload();
+  }
+}
 
 export class Hud {
   /**
@@ -814,11 +850,15 @@ export class Hud {
     }
   }
 
-  /* ---------- Caption, notice, loading ---------- */
+  /* ---------- Caption, enrichment counter, notice, loading ---------- */
 
   setCaption(title, stats) {
     $('universe-title').textContent = title;
     $('universe-stats').textContent = stats || '';
+  }
+
+  updateEnrichmentStatus(status) {
+    updateEnrichmentStatus(status);
   }
 
   setNotice(text, action) {

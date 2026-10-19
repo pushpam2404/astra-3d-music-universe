@@ -121,7 +121,6 @@ async function initApp() {
       hud.syncHistoryToggleUI();
       hud.updateHistoryButtonBadge();
 
-      // If connected to Spotify, rebuild cleanly with only Spotify API items (or merged)
       const hasSpotifyItemsInCurrent = AppState.nodes.some(n => n.fromSpotifyApi);
       if (authStatus.loggedIn) {
         await loadLive({
@@ -304,13 +303,13 @@ async function initApp() {
     if (e.key === 'Escape' && AppState.selectedNode && document.activeElement?.tagName !== 'INPUT') clearSelection();
   });
 
-  /** Closest sun, artist, or song moon on screen within `radius` px. */
+  /** Closest visible sun, artist, or song moon on screen within `radius` px. */
   function pickNearest(x, y, radius, isTouch = false) {
     let best = null, bestD = radius;
     const v = new THREE.Vector3();
     const hasLens = AppState.activeLens && AppState.activeLens !== 'all';
     for (const n of AppState.nodes) {
-      if (!n.position || n.meshGroup?.visible === false || (n.focusLevel ?? 1) < 0.08) continue;
+      if (!n.position || n.meshGroup?.visible === false || (n.focusLevel ?? 1) < 0.08 || (n.focusTarget ?? 1) === 0) continue;
       if (n.type === 'artist' && !AppState.layers.artists) continue;
       if (n.type === 'track') {
         if (!AppState.layers.tracks) continue;
@@ -327,20 +326,25 @@ async function initApp() {
 
   function pickNode(isTouch = false) {
     raycaster.setFromCamera(pointer, camera);
-    const meshes = [];
+    const interactiveMeshes = [];
     AppState.nodes.forEach(n => {
-      if (n.sphereMesh && n.meshGroup?.visible && (n.focusLevel ?? 1) >= 0.08) meshes.push(n.sphereMesh);
+      if (n.sphereMesh && n.meshGroup?.visible && (n.focusLevel ?? 1) >= 0.08 && (n.focusTarget ?? 1) > 0) {
+        interactiveMeshes.push(n.sphereMesh);
+      }
     });
-    if (factory.artistMesh && AppState.layers.artists) meshes.push(factory.artistMesh);
+    if (factory.artistMesh && AppState.layers.artists) interactiveMeshes.push(factory.artistMesh);
     const zoomedIn = camera.position.length() < layout.boundingRadius * 0.95;
     const hasLens = AppState.activeLens && AppState.activeLens !== 'all';
     if (factory.trackMesh && AppState.layers.tracks && (AppState.selectedNode || hasLens || zoomedIn || isTouch)) {
-      meshes.push(factory.trackMesh);
+      interactiveMeshes.push(factory.trackMesh);
     }
-    const hits = raycaster.intersectObjects(meshes, false);
+
+    // Filter out invisible objects before checking intersections
+    const pickableTargets = interactiveMeshes.filter((m) => m.visible);
+    const hits = raycaster.intersectObjects(pickableTargets, false);
     for (const hit of hits) {
       const node = factory.nodeFromHit(hit);
-      if (node && node.meshGroup?.visible !== false && (node.focusLevel ?? 1) >= 0.08) {
+      if (node && node.meshGroup?.visible !== false && (node.focusLevel ?? 1) >= 0.08 && (node.focusTarget ?? 1) > 0) {
         return node;
       }
     }
@@ -430,6 +434,7 @@ async function initApp() {
     AppState.isDemo = true;
     loadDataset(GALAXY_PRESETS.cosmic_synth);
     hud.setCaption('A demo universe', 'Connect Spotify or import your listening history to map your own music.');
+    hud.updateEnrichmentStatus({ waitingCount: 0, readyOnReloadCount: 0 });
     hud.setNotice(null);
   }
 
@@ -471,7 +476,12 @@ async function initApp() {
       } else {
         hud.setNotice(null);
       }
-      if (diagnostics.pendingArtists?.length) enrichInBackground(diagnostics.pendingArtists);
+
+      if (diagnostics.pendingArtists?.length) {
+        enrichInBackground(diagnostics.pendingArtists);
+      } else {
+        hud.updateEnrichmentStatus({ waitingCount: 0, readyOnReloadCount: 0 });
+      }
     } catch (err) {
       console.error('Failed to load universe:', err);
       loadDemo();
@@ -486,26 +496,53 @@ async function initApp() {
   }
 
   let enrichRun = 0;
-  async function enrichInBackground(pending) {
+  async function enrichInBackground(unenrichedArtists) {
     const run = ++enrichRun;
-    const total = pending.length;
-    let finished = 0;
-    const updateAction = { label: 'Update map', run: () => { enrichRun++; loadLive({ skipInitialEnrich: true }); } };
-    for (let i = 0; i < pending.length && run === enrichRun; i += ENRICH_BATCH) {
-      if (!authStatus.missingScopes?.length) {
-        hud.setNotice(`Looking up genres in the background: ${plural(finished, 'artist')} of ${total.toLocaleString()} done.`, finished ? updateAction : null);
-      }
+    let waitingToFetchCount = unenrichedArtists.length;
+    let newlyResolvedForReloadCount = 0;
+
+    const applyResolvedNow = () => {
+      enrichRun++;
+      hud.updateEnrichmentStatus({ waitingCount: 0, readyOnReloadCount: 0 });
+      loadLive({ skipInitialEnrich: true });
+    };
+
+    hud.updateEnrichmentStatus({
+      waitingCount: waitingToFetchCount,
+      readyOnReloadCount: newlyResolvedForReloadCount,
+      onApply: applyResolvedNow
+    });
+
+    for (let i = 0; i < unenrichedArtists.length && run === enrichRun; i += ENRICH_BATCH) {
+      const batch = unenrichedArtists.slice(i, i + ENRICH_BATCH);
       try {
-        const { artistMeta } = await enrichArtists(pending.slice(i, i + ENRICH_BATCH));
-        saveArtistMeta(artistMeta);
-        finished += Object.keys(artistMeta).length;
+        // Calls Wikidata/Last.fm/MusicBrainz ONLY (never Spotify)
+        const { artistMeta } = await enrichArtists(batch);
+        if (run !== enrichRun) return;
+
+        const toSave = {};
+        for (const item of batch) {
+          const id = item.id || item;
+          const meta = artistMeta?.[id] || { g: [], c: [], t: Date.now() };
+          // Mark as checked in localStorage so we don't re-fetch empty results on every page load
+          toSave[id] = meta;
+          const genres = meta.g || meta.genres;
+          if (Array.isArray(genres) && genres.length > 0) {
+            newlyResolvedForReloadCount++;
+          }
+        }
+        saveArtistMeta(toSave);
+
+        waitingToFetchCount = Math.max(0, unenrichedArtists.length - (i + batch.length));
+        hud.updateEnrichmentStatus({
+          waitingCount: waitingToFetchCount,
+          readyOnReloadCount: newlyResolvedForReloadCount,
+          onApply: applyResolvedNow
+        });
       } catch (err) {
         console.warn('Background genre lookup stopped:', err);
         break;
       }
-    }
-    if (run === enrichRun && finished && !authStatus.missingScopes?.length) {
-      hud.setNotice(`Found genres for ${plural(finished, 'more artist')}.`, updateAction);
     }
   }
 
@@ -541,7 +578,7 @@ async function initApp() {
     factory.updatePulses(AppState.pulseParticles, layout.orbitMultiplier);
     factory.updateSolarShaders(now * 0.001);
     factory.updateNebulae(camera, suns);
-    factory.updateFocus(AppState.selectedNode || AppState.hoveredNode, AppState.nodes, AppState.edges, AppState.activeLens);
+    factory.updateFocus(AppState.selectedNode, AppState.nodes, AppState.edges, AppState.activeLens);
 
     cameraController.update(AppState.selectedNode);
 

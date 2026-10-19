@@ -1,19 +1,18 @@
 // src/physics/galaxyLayout.js
 /**
- * 3D layout where distance means similarity AND clusters sit at a balanced, breathable
- * distance from one another (never overlapping into a clumsy blob, and never flung
- * into distant corners):
+ * 3D layout where distance means similarity, clusters sit at a balanced distance from
+ * one another, and artist planets NEVER overlap with other artist planets:
  *
- *  - Cluster centers start on an affinity-seriated sphere and undergo 3D pairwise
- *    clearance + shell relaxation so adjacent clusters stay distinct with a clean
- *    breathable channel (`meanOriginDist ≈ 76` units, right between the tight 48-unit
- *    and wide 127-unit layouts).
  *  - Inside each cluster, artists are placed using their UMAP similarity direction
- *    (`artist.embed`) blended with cube-root rank radius so top artists sit near the
- *    sun, musically similar artists sit together, and every cluster keeps a clean
- *    spherical boundary.
- *  - Bridge artists (strong ties to two clusters) float in the channel between both clouds.
- *  - Tracks orbit their artist as moons on inclined orbits.
+ *    blended with a 3D Fibonacci sphere distribution, followed by a deterministic 3D
+ *    planet de-overlapping solver (`resolveClusterArtistOverlaps`) and global
+ *    3D collision resolution pass (`resolveArtistCollisions`) that guarantees
+ *    every pair of artist planets maintains a clear surface-to-surface gap including
+ *    their moon orbit shells.
+ *  - Cluster centers sit on an affinity-seriated sphere and undergo 3D pairwise
+ *    clearance + shell relaxation (`computeBalancedClusterAnchors`).
+ *  - Bridge artists float in the channel between both clouds and are de-overlapped.
+ *  - Tracks orbit their artist as crystal moons on inclined orbits.
  */
 import * as THREE from 'three';
 import { LAYOUT_CONFIG } from '../config/constants.js';
@@ -29,9 +28,9 @@ function hash01(str) {
 
 /** Evenly spread unit vectors; consecutive indices are spatial neighbours. */
 function fibonacciSphere(i, n) {
-  if (n === 1) return new THREE.Vector3(0, 0, 0);
+  if (n <= 1) return new THREE.Vector3(0, 1, 0);
   const y = 1 - (2 * (i + 0.5)) / n;
-  const r = Math.sqrt(1 - y * y);
+  const r = Math.sqrt(Math.max(0, 1 - y * y));
   const theta = Math.PI * (3 - Math.sqrt(5)) * i;
   return new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r);
 }
@@ -40,8 +39,8 @@ function fibonacciSphere(i, n) {
 function directionFor(id) {
   const u = hash01(`${id}:u`) * 2 - 1;
   const phi = hash01(`${id}:phi`) * Math.PI * 2;
-  const r = Math.sqrt(1 - u * u);
-  return new THREE.Vector3(r * Math.cos(phi), u, Math.sin(phi) * r);
+  const r = Math.sqrt(Math.max(0, 1 - u * u));
+  return new THREE.Vector3(r * Math.cos(phi), u, r * Math.sin(phi));
 }
 
 /** Orders suns so that consecutive ones have high affinity. */
@@ -63,8 +62,165 @@ function seriate(suns, affinity) {
 }
 
 /**
+ * Resolves all planet-to-planet overlaps inside and across clusters.
+ * Guarantees a minimum clearance of (rA + rB + moonOrbitAllowance + padding).
+ */
+export function resolveArtistCollisions(artists, iterations = 18) {
+  const n = artists.length;
+  if (n < 2) return;
+
+  // Effective collision radius includes the planet's visual radius + its moon orbit shell + breathing room
+  const getEffectiveRadius = (a) => {
+    const planetRadius = a.radius || a.baseRadius || 1.2;
+    const hasMoons = (a.trackCount || a.tracks?.length || 0) > 0;
+    const moonClearance = hasMoons ? 2.4 : 0.8;
+    return planetRadius + moonClearance;
+  };
+
+  for (let iter = 0; iter < iterations; iter++) {
+    let moved = false;
+
+    for (let i = 0; i < n; i++) {
+      const a = artists[i];
+      if (!a?.position) continue;
+      const rA = getEffectiveRadius(a);
+
+      for (let j = i + 1; j < n; j++) {
+        const b = artists[j];
+        if (!b?.position) continue;
+        const rB = getEffectiveRadius(b);
+        const minDist = rA + rB;
+
+        let dx = b.position.x - a.position.x;
+        if (Math.abs(dx) >= minDist) continue;
+        let dy = b.position.y - a.position.y;
+        if (Math.abs(dy) >= minDist) continue;
+        let dz = b.position.z - a.position.z;
+        if (Math.abs(dz) >= minDist) continue;
+
+        let distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq < minDist * minDist) {
+          moved = true;
+          let dist = Math.sqrt(distSq);
+
+          // Deterministic Golden-Angle nudge if two artists spawned on the exact same UMAP point
+          if (dist < 1e-4) {
+            const phi = (i * 2.399963229728653) % (Math.PI * 2);
+            const costheta = ((j % 17) / 8.5) - 1;
+            const sintheta = Math.sqrt(Math.max(0, 1 - costheta * costheta));
+            dx = sintheta * Math.cos(phi);
+            dy = sintheta * Math.sin(phi);
+            dz = costheta;
+            dist = 1;
+          }
+
+          const overlap = (minDist - dist) * 0.55;
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const nz = dz / dist;
+
+          // Weight push by inverse play count so top artists anchor their spot while smaller ones shift outward
+          const playsA = a.playCount ?? a.plays ?? 1;
+          const playsB = b.playCount ?? b.plays ?? 1;
+          const wA = 1 / Math.sqrt(playsA + 5);
+          const wB = 1 / Math.sqrt(playsB + 5);
+          const wSum = wA + wB;
+
+          a.position.x -= nx * overlap * (wA / wSum) * 2;
+          a.position.y -= ny * overlap * (wA / wSum) * 2;
+          a.position.z -= nz * overlap * (wA / wSum) * 2;
+
+          b.position.x += nx * overlap * (wB / wSum) * 2;
+          b.position.y += ny * overlap * (wB / wSum) * 2;
+          b.position.z += nz * overlap * (wB / wSum) * 2;
+        }
+      }
+    }
+
+    if (!moved) break;
+  }
+}
+
+/**
+ * Resolves 3D planet-to-planet overlaps inside a cluster (`offsetProp`, e.g. 'localClusterOffset'
+ * or 'cloudOffset') so no two artist planets ever intersect or touch each other, and no
+ * artist planet clips into its central Genre Sun (`coreRadius`).
+ */
+function resolveClusterArtistOverlaps(list, coreRadius, offsetProp = 'localClusterOffset') {
+  const n = list.length;
+  if (n <= 1) return;
+
+  const diff = new THREE.Vector3();
+  const iters = n > 400 ? 18 : 26;
+
+  const getEffR = (a) => {
+    const r = a.radius || a.baseRadius || 1.2;
+    const hasMoons = (a.trackCount || 0) > 0;
+    return r + (hasMoons ? 2.4 : 0.8);
+  };
+
+  for (let iter = 0; iter < iters; iter++) {
+    let moved = false;
+    for (let i = 0; i < n; i++) {
+      const a = list[i];
+      const posA = a[offsetProp];
+      const rA = getEffR(a);
+
+      // Keep outside the Genre Sun's inner core
+      const minSunDist = coreRadius + (a.baseRadius || 1.6) + 1.8;
+      const dSun = posA.length();
+      if (dSun < minSunDist) {
+        moved = true;
+        if (dSun < 1e-4) posA.copy(fibonacciSphere(i, n)).multiplyScalar(minSunDist);
+        else posA.multiplyScalar(minSunDist / dSun);
+      }
+
+      for (let j = i + 1; j < n; j++) {
+        const b = list[j];
+        const posB = b[offsetProp];
+        const rB = getEffR(b);
+        const minDist = rA + rB;
+
+        const dx = posB.x - posA.x;
+        if (Math.abs(dx) >= minDist) continue;
+        const dy = posB.y - posA.y;
+        if (Math.abs(dy) >= minDist) continue;
+        const dz = posB.z - posA.z;
+        if (Math.abs(dz) >= minDist) continue;
+
+        const dSq = dx * dx + dy * dy + dz * dz;
+        if (dSq >= minDist * minDist) continue;
+
+        moved = true;
+        let d = Math.sqrt(dSq);
+        if (d < 1e-4) {
+          const phi = (i * 2.399963229728653) % (Math.PI * 2);
+          const costheta = ((j % 17) / 8.5) - 1;
+          const sintheta = Math.sqrt(Math.max(0, 1 - costheta * costheta));
+          diff.set(sintheta * Math.cos(phi), sintheta * Math.sin(phi), costheta);
+          d = 1;
+        } else {
+          diff.set(dx / d, dy / d, dz / d);
+        }
+
+        const overlap = (minDist - d) * 0.55;
+        const playsA = a.playCount ?? a.plays ?? 1;
+        const playsB = b.playCount ?? b.plays ?? 1;
+        const wA = 1 / Math.sqrt(playsA + 5);
+        const wB = 1 / Math.sqrt(playsB + 5);
+        const wSum = wA + wB;
+
+        posA.addScaledVector(diff, -overlap * (wA / wSum) * 2);
+        posB.addScaledVector(diff, overlap * (wB / wSum) * 2);
+      }
+    }
+    if (!moved) break;
+  }
+}
+
+/**
  * Places cluster anchors in 3D in the Goldilocks sweet spot:
- *  - Right between the tight 48-unit layout and the wide 127-unit layout (`meanOriginDist ≈ 76`).
  *  - Pairwise clearance guarantees adjacent clusters never collide into a clumsy clump while
  *    radial shell attraction prevents any cluster from drifting far away.
  */
@@ -75,19 +231,19 @@ function computeBalancedClusterAnchors(order) {
 
   const radii = order.map(s => s.clusterRadius || 20);
   const meanR = radii.reduce((a, b) => a + b, 0) / n;
-  const targetShellR = Math.max(46, meanR * Math.sqrt(n) * 0.68);
+  const targetShellR = Math.max(48, meanR * Math.sqrt(n) * 0.72);
 
   const anchors = order.map((_, i) => fibonacciSphere(i, n).multiplyScalar(targetShellR));
   const diff = new THREE.Vector3();
 
-  for (let iter = 0; iter < 80; iter++) {
+  for (let iter = 0; iter < 85; iter++) {
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         diff.subVectors(anchors[i], anchors[j]);
         const d = diff.length() || 0.01;
-        const desiredMin = (radii[i] + radii[j]) * 0.92 + 10.0;
+        const desiredMin = (radii[i] + radii[j]) * 0.96 + 11.0;
         if (d < desiredMin) {
-          const push = (desiredMin - d) * 0.48;
+          const push = (desiredMin - d) * 0.5;
           diff.divideScalar(d);
           anchors[i].addScaledVector(diff, push);
           anchors[j].addScaledVector(diff, -push);
@@ -97,8 +253,8 @@ function computeBalancedClusterAnchors(order) {
 
     for (let i = 0; i < n; i++) {
       const r = anchors[i].length() || 1;
-      const targetR = targetShellR + (radii[i] - meanR) * 0.3;
-      const pull = (targetR - r) * 0.18;
+      const targetR = targetShellR + (radii[i] - meanR) * 0.32;
+      const pull = (targetR - r) * 0.16;
       anchors[i].multiplyScalar((r + pull) / r);
     }
   }
@@ -142,7 +298,11 @@ export class GalaxyLayoutEngine {
       tracksByArtist.get(t.artistId).push(t);
     });
     artists.forEach(a => {
-      const count = Math.min(12, tracksByArtist.get(a.id)?.length || 0);
+      const fullTrackCount = tracksByArtist.get(a.id)?.length || 0;
+      const count = Math.min(12, fullTrackCount);
+      a.trackCount = fullTrackCount;
+      a.radius = a.baseRadius || 1.2;
+      a.playCount = a.plays || a.basePlays || 1;
       a.systemRadius = a.baseRadius + C.moonInnerGap + (count ? C.moonSpacing * Math.sqrt(count) * 1.05 : 0);
     });
 
@@ -158,21 +318,28 @@ export class GalaxyLayoutEngine {
       else if (a.primarySunId) members.get(a.primarySunId).push(a);
     });
 
-    // Cloud geometry per sun: compact, well-contained 3D clouds around each sun.
+    // Cloud geometry per sun: stratified 3D Fibonacci directions + planet overlap resolution
     suns.forEach(sun => {
       const list = members.get(sun.id).sort((a, b) => b.plays - a.plays);
       const meanSystem = list.length ? list.reduce((s, a) => s + a.systemRadius, 0) / list.length : 0;
-      const spacing = Math.max(4.2, meanSystem * 0.72);
+      const spacing = Math.max(4.6, meanSystem * 0.76);
       const core = sun.baseRadius * C.sunCoreFactor + C.cloudInnerGap;
-      sun.clusterRadius = core + spacing * Math.cbrt(list.length + 1) * 0.56;
+      sun.coreRadius = core;
+      sun.clusterRadius = core + spacing * Math.cbrt(list.length + 1) * 0.62;
       list.forEach((a, k) => {
         const t = (k + 0.5) / list.length;
         const r = core + (sun.clusterRadius - core) * Math.cbrt(t);
+        const dir = fibonacciSphere(k, list.length).addScaledVector(directionFor(a.id), 0.32).normalize();
         a.labelRank = k;
         a.isBridge = false;
         a.cloudRadiusTarget = r;
-        a.cloudOffset = directionFor(a.id).multiplyScalar(r);
+        a.cloudOffset = dir.multiplyScalar(r);
       });
+      resolveClusterArtistOverlaps(list, core, 'cloudOffset');
+      if (list.length) {
+        const sortedR = list.map(a => a.cloudOffset.length() + a.baseRadius).sort((x, y) => x - y);
+        sun.clusterRadius = Math.max(sun.clusterRadius, sortedR[Math.floor(sortedR.length * 0.92)] || sun.clusterRadius);
+      }
     });
 
     const sharedCount = new Map();
@@ -214,29 +381,18 @@ export class GalaxyLayoutEngine {
         const along = THREE.MathUtils.lerp(A.clusterRadius * 0.85, dist - B.clusterRadius * 0.85, 0.25 + w);
         const perpA = new THREE.Vector3().crossVectors(dir, Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
         const perpB = new THREE.Vector3().crossVectors(dir, perpA);
-        const ring = C.bridgeSpacing * Math.sqrt(i);
+        const ring = Math.max(3.8, C.bridgeSpacing) * Math.sqrt(i + 0.5);
         const angle = i * 2.399963;
         a.isBridge = true;
         a.labelRank = i;
         a.bridgeOffsetFromMid = new THREE.Vector3()
           .addScaledVector(perpA, Math.cos(angle) * ring)
-          .addScaledVector(perpB, Math.sin(angle) * ring);
-        a.bridgeLerp = Math.max(0.15, Math.min(0.85, along / dist));
+          .addScaledVector(perpB, Math.sin(angle) * ring)
+          .addScaledVector(dir, ((i % 3) - 1) * 3.2);
+        a.bridgeLerp = Math.max(0.18, Math.min(0.82, along / dist));
         a.bridgeAnchor = A.anchor.clone()
           .addScaledVector(dir, Math.max(0, along))
           .add(a.bridgeOffsetFromMid);
-      });
-    });
-
-    tracksByArtist.forEach((list, artistId) => {
-      const parent = artistById.get(artistId);
-      list.sort((x, y) => y.plays - x.plays).forEach((t, k) => {
-        t.parentNode = parent || null;
-        t.moonRadius = (parent?.baseRadius || 3) + C.moonInnerGap + C.moonSpacing * Math.sqrt(k) * 1.35;
-        t.moonPhase = (k / list.length) * Math.PI * 2 + hash01(t.id) * 0.6;
-        t.moonSpeed = C.moonSpeed / (1 + Math.sqrt(k) * 0.35);
-        t.moonInclination = (hash01(`${t.id}:inc`) - 0.5) * C.moonInclinationRange;
-        t.moonNode = hash01(`${t.id}:node`) * Math.PI * 2;
       });
     });
 
@@ -250,11 +406,48 @@ export class GalaxyLayoutEngine {
         : (sun && a.cloudOffset ? sun.anchor.clone().add(a.cloudOffset) : new THREE.Vector3());
       a.layoutPos = { clusters: p };
       a.localClusterOffset = a.cloudOffset ? a.cloudOffset.clone() : new THREE.Vector3();
+      a.position.copy(p);
     });
 
     this.computeSimilarityPositions(suns, artists, sunById, members);
     this.mode = this.hasSimilarity ? 'similarity' : 'clusters';
     this.boundingRadius = this.bounds[this.mode] * this.clusterSpreadMultiplier;
+
+    // Global 3D collision resolution pass across all artists right before moon positions are assigned
+    artists.forEach(a => {
+      const targetPos = a.layoutPos[this.mode] || a.layoutPos.clusters;
+      if (targetPos) a.position.copy(targetPos);
+    });
+    resolveArtistCollisions(artists, 18);
+    artists.forEach(a => {
+      if (a.layoutPos) a.layoutPos[this.mode] = a.position.clone();
+      if (a.isBridge) {
+        const sunA = sunById.get(a.primarySunId);
+        const sunB = sunById.get(a.secondarySunId);
+        if (sunA && sunB) {
+          const mid = new THREE.Vector3().lerpVectors(sunA.anchor, sunB.anchor, a.bridgeLerp ?? 0.5);
+          a.bridgeOffsetFromMid = a.position.clone().sub(mid);
+          a.bridgeAnchor = a.position.clone();
+        }
+      } else {
+        const sun = sunById.get(a.primarySunId);
+        if (sun) {
+          a.localClusterOffset = a.position.clone().sub(sun.anchor);
+        }
+      }
+    });
+
+    tracksByArtist.forEach((list, artistId) => {
+      const parent = artistById.get(artistId);
+      list.sort((x, y) => y.plays - x.plays).forEach((t, k) => {
+        t.parentNode = parent || null;
+        t.moonRadius = (parent?.baseRadius || 3) + C.moonInnerGap + C.moonSpacing * Math.sqrt(k) * 1.35;
+        t.moonPhase = (k / list.length) * Math.PI * 2 + hash01(t.id) * 0.6;
+        t.moonSpeed = C.moonSpeed / (1 + Math.sqrt(k) * 0.35);
+        t.moonInclination = (hash01(`${t.id}:inc`) - 0.5) * C.moonInclinationRange;
+        t.moonNode = hash01(`${t.id}:node`) * Math.PI * 2;
+      });
+    });
 
     this.time = 0;
     this.applyPositions(nodes);
@@ -285,21 +478,32 @@ export class GalaxyLayoutEngine {
       const list = members.get(sun.id) || [];
       if (!list.length) return;
       const center = umapCenter.get(sun.id) || new THREE.Vector3();
-      const offsets = list.map(a => {
-        if (!Array.isArray(a.embed)) return directionFor(a.id);
+      const offsets = list.map((a, idx) => {
+        if (!Array.isArray(a.embed)) return fibonacciSphere(idx, list.length);
         const off = new THREE.Vector3(...a.embed).sub(center);
-        return off.lengthSq() > 1e-6 ? off : directionFor(a.id);
+        return off.lengthSq() > 1e-6 ? off : fibonacciSphere(idx, list.length);
       });
       const lengths = offsets.map(o => o.length()).sort((a, b) => a - b);
       const p85 = lengths[Math.floor(lengths.length * 0.85)] || 1;
 
       list.forEach((a, idx) => {
         const off = offsets[idx];
-        const dir = off.clone().normalize().addScaledVector(directionFor(a.id), 0.28).normalize();
+        // Blend UMAP similarity direction with stratified 3D Fibonacci sphere direction
+        const fibDir = fibonacciSphere(idx, list.length);
+        const dir = off.clone().normalize()
+          .addScaledVector(fibDir, 0.48)
+          .addScaledVector(directionFor(a.id), 0.22)
+          .normalize();
         const normUmapR = Math.min(0.95, off.length() / p85);
         const rankR = a.cloudRadiusTarget || (sun.clusterRadius * 0.6);
-        const r = THREE.MathUtils.lerp(rankR, sun.clusterRadius * (0.18 + 0.78 * normUmapR), 0.35);
+        const r = THREE.MathUtils.lerp(rankR, sun.clusterRadius * (0.22 + 0.76 * normUmapR), 0.32);
         a.localClusterOffset = dir.clone().multiplyScalar(r);
+      });
+
+      // Run 3D collision & spacing solver so zero artist planets overlap in similarity mode
+      resolveClusterArtistOverlaps(list, sun.coreRadius || 12, 'localClusterOffset');
+
+      list.forEach(a => {
         a.layoutPos.similarity = sun.anchor.clone().add(a.localClusterOffset);
       });
     });
@@ -349,7 +553,7 @@ export class GalaxyLayoutEngine {
       } else {
         const sun = n._sun || (n._sun = nodes.find(x => x.id === n.primarySunId));
         if (sun && n.localClusterOffset) {
-          const planetSpread = 0.85 + 0.15 * scale;
+          const planetSpread = Math.max(1.0, scale);
           n.position.copy(sun.position).addScaledVector(n.localClusterOffset, planetSpread);
         } else {
           n.position.copy(n.layoutPos[mode] || n.layoutPos.clusters);

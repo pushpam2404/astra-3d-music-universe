@@ -138,7 +138,7 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
           source: node,
           target: featArtist,
           type: 'track_collab',
-          color: '#FFB800'
+          color: '#38bdf8'
         });
         node.neighbors.add(featArtist.id);
         featArtist.neighbors.add(node.id);

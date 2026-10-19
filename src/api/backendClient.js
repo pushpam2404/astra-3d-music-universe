@@ -1,17 +1,57 @@
 // src/api/backendClient.js
 /**
  * Thin client for the ASTRA backend (server/). Spotify tokens never reach the browser.
- * When browser-imported `historySummary` is present, universe merging & clustering runs
- * directly in the browser so multi-megabyte history payloads never hit serverless
- * request/response limits (HTTP 413 on Vercel).
+ * When browser-imported `historySummary` or cached Spotify signals are present, universe
+ * merging & clustering runs directly in the browser so multi-megabyte history payloads
+ * never hit serverless request/response limits (HTTP 413 on Vercel) and reloads read
+ * from the 6-hour local Spotify signal cache (0 repeat Spotify API calls).
  */
 import { mergeSignalsAndRank, assembleUniverseFromSignals } from '../etl/universeAssembler.js';
 
 export const SPOTIFY_LOGIN_URL = '/api/auth/login';
 
+const SPOTIFY_SIGNAL_CACHE_KEY = 'astra_spotify_signals_v1';
+const SPOTIFY_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — protects against Spotify 429 rate limits
+
 const INITIAL_CLIENT_ENRICH_BATCH = 50;
 const INITIAL_CLIENT_ENRICH_CONCURRENCY = 3; // Top 150 artists enriched in parallel (~2.5 KB/req) before first render
 const MAX_POST_KNOWN_META = 1200;
+
+export function getCachedSpotifySignals(forceRefresh = false) {
+  if (forceRefresh) return null;
+  try {
+    const raw = localStorage.getItem(SPOTIFY_SIGNAL_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (Date.now() - parsed.timestamp > SPOTIFY_CACHE_TTL_MS) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+}
+
+export function setCachedSpotifySignals(data) {
+  try {
+    if (!data) {
+      localStorage.removeItem(SPOTIFY_SIGNAL_CACHE_KEY);
+      return;
+    }
+    localStorage.setItem(
+      SPOTIFY_SIGNAL_CACHE_KEY,
+      JSON.stringify({ timestamp: Date.now(), data })
+    );
+  } catch (e) {
+    console.warn('Could not cache Spotify signals in localStorage:', e);
+  }
+}
+
+export function clearCachedSpotifySignals() {
+  try {
+    localStorage.removeItem(SPOTIFY_SIGNAL_CACHE_KEY);
+  } catch {
+    // Ignore
+  }
+}
 
 async function requestJson(url, options) {
   const res = await fetch(url, { credentials: 'same-origin', ...options });
@@ -54,7 +94,7 @@ export async function getHistoryStatus() {
   }
 }
 
-/** Looks up genres for up to 50 artists; resolves to { artistMeta, warnings }. */
+/** Looks up genres for up to 50 artists (Wikidata / MusicBrainz / Last.fm ONLY, never Spotify). */
 export function enrichArtists(artists) {
   return requestJson('/api/enrich', {
     method: 'POST',
@@ -64,13 +104,19 @@ export function enrichArtists(artists) {
 }
 
 /**
- * Builds the complete universe directly in the browser when `historySummary` is present,
- * fetching only lightweight live Spotify signals (if logged in) and small `/api/enrich`
- * genre batches (~2 KB each) so request bodies never exceed a few kilobytes.
+ * Builds the complete universe directly in the browser when `historySummary` is present
+ * or when cached/live Spotify signals are used, fetching only lightweight `/api/enrich`
+ * genre batches (~2 KB each) and caching Spotify OAuth signals for 6 hours.
  */
 async function buildBrowserHistoryUniverse(
   knownMeta = {},
-  { historySummary, loggedIn = false, skipInitialEnrich = false, spotifyApiOnly = false } = {}
+  {
+    historySummary = null,
+    loggedIn = false,
+    skipInitialEnrich = false,
+    spotifyApiOnly = false,
+    forceSpotifyRefresh = false
+  } = {}
 ) {
   const diagnostics = { warnings: [], clientBuilt: true };
   let liveSignals = {
@@ -82,16 +128,28 @@ async function buildBrowserHistoryUniverse(
   };
 
   if (loggedIn) {
-    try {
-      const res = await requestJson('/api/universe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ signalsOnly: true, useLocalHistory: false })
-      });
-      if (res?.liveSignals) liveSignals = res.liveSignals;
-      if (res?.diagnostics?.warnings?.length) diagnostics.warnings.push(...res.diagnostics.warnings);
-    } catch (err) {
-      diagnostics.warnings.push(`Live Spotify fetch unavailable (${err.message}); showing your streaming history universe.`);
+    const cachedSignals = getCachedSpotifySignals(forceSpotifyRefresh);
+    if (cachedSignals && cachedSignals.connectedSpotify) {
+      liveSignals = cachedSignals;
+      diagnostics.spotifySignalsCached = true;
+    } else {
+      try {
+        const res = await requestJson('/api/universe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signalsOnly: true, useLocalHistory: false })
+        });
+        if (res?.liveSignals) {
+          liveSignals = res.liveSignals;
+          if (liveSignals.connectedSpotify) {
+            setCachedSpotifySignals(liveSignals);
+          }
+        }
+        if (res?.diagnostics?.warnings?.length) diagnostics.warnings.push(...res.diagnostics.warnings);
+      } catch (err) {
+        if (!historySummary?.validPlays) throw err;
+        diagnostics.warnings.push(`Live Spotify fetch unavailable (${err.message}); showing your streaming history universe.`);
+      }
     }
   }
 
@@ -114,10 +172,13 @@ async function buildBrowserHistoryUniverse(
       const results = await Promise.all(
         batches.map(batch => enrichArtists(batch).catch(() => ({ artistMeta: {}, warnings: [] })))
       );
-      results.forEach(r => {
-        if (r?.artistMeta) {
-          Object.assign(newlyEnrichedMeta, r.artistMeta);
-          Object.assign(mergedKnown, r.artistMeta);
+      results.forEach((r, idx) => {
+        const batch = batches[idx] || [];
+        const map = r?.artistMeta || {};
+        for (const a of batch) {
+          const entry = map[a.id] || { g: [], c: [], t: Date.now() };
+          newlyEnrichedMeta[a.id] = entry;
+          mergedKnown[a.id] = entry;
         }
       });
     } catch {
@@ -144,14 +205,26 @@ async function buildBrowserHistoryUniverse(
  */
 export async function fetchUniverse(
   knownMeta = {},
-  { historySummary = null, useLocalHistory = true, loggedIn = false, skipInitialEnrich = false, spotifyApiOnly = false } = {}
+  {
+    historySummary = null,
+    useLocalHistory = true,
+    loggedIn = false,
+    skipInitialEnrich = false,
+    spotifyApiOnly = false,
+    forceSpotifyRefresh = false
+  } = {}
 ) {
-  if (historySummary?.isAstraHistorySummary && !spotifyApiOnly) {
+  const hasCachedSpotify = loggedIn && Boolean(getCachedSpotifySignals(forceSpotifyRefresh));
+  if (
+    (historySummary?.isAstraHistorySummary && !spotifyApiOnly) ||
+    (loggedIn && (spotifyApiOnly || !useLocalHistory || hasCachedSpotify))
+  ) {
     return buildBrowserHistoryUniverse(knownMeta, {
-      historySummary,
+      historySummary: spotifyApiOnly ? null : historySummary,
       loggedIn,
       skipInitialEnrich,
-      spotifyApiOnly
+      spotifyApiOnly,
+      forceSpotifyRefresh
     });
   }
 
@@ -167,5 +240,6 @@ export async function fetchUniverse(
 }
 
 export function logout() {
+  clearCachedSpotifySignals();
   return requestJson('/api/auth/logout', { method: 'POST' });
 }
