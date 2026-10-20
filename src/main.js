@@ -515,10 +515,10 @@ async function initApp() {
     let waitingToFetchCount = unenrichedArtists.length;
     let newlyResolvedForReloadCount = 0;
 
-    const applyResolvedNow = () => {
+    const applyResolvedNow = async () => {
       enrichRun++;
       hud.updateEnrichmentStatus({ waitingCount: 0, readyOnReloadCount: 0 });
-      loadLive({ skipInitialEnrich: true });
+      await loadLive({ skipInitialEnrich: true });
     };
 
     hud.updateEnrichmentStatus({
@@ -537,7 +537,7 @@ async function initApp() {
         const toSave = {};
         for (const item of batch) {
           const id = item.id || item;
-          const meta = artistMeta?.[id] || { g: [], c: [], t: Date.now() };
+          const meta = artistMeta?.[id] || { g: [], c: [], t: Date.now(), l: 4 };
           // Mark as checked in localStorage so we don't re-fetch empty results on every page load
           toSave[id] = meta;
           const genres = meta.g || meta.genres;

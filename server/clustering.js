@@ -228,7 +228,9 @@ function embed3d(n, neighbors, labels) {
  */
 export function clusterArtists(artists, collabs, together = new Map()) {
   const byId = new Map(artists.map(a => [a.id, a]));
-  const maxClusters = Math.max(8, Math.min(14, Math.round(Math.sqrt(artists.length) * 0.7)));
+  // Dynamic cluster ceiling scaled to artist count:
+  // ~100 artists -> 8, ~500 -> 12, ~1,500 -> 16, ~3,300+ -> 20, hard cap at 22
+  const maxClusters = Math.max(8, Math.min(22, Math.round(8 + Math.sqrt(Math.max(0, artists.length - 100)) * 0.21)));
 
   const n = artists.length;
   artists.forEach(a => {
@@ -250,7 +252,7 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     const norm = Math.hypot(...entries.map(e => e[1])) || 1;
     a.vecIdx = Int32Array.from(entries, e => e[0]);
     a.vecW = Float32Array.from(entries, e => e[1] / norm);
-    const fam = familyVector(a.genres);
+    const fam = familyVector(a.genres, a.countries);
     const famEntries = Object.entries(fam).map(([f, w]) => {
       if (!familyIds.has(f)) familyIds.set(f, familyIds.size);
       return [familyIds.get(f), w];
@@ -352,8 +354,12 @@ export function clusterArtists(artists, collabs, together = new Map()) {
   const graph = new Graph({ type: 'undirected' });
   artists.forEach(a => graph.addNode(a.id));
   edges.forEach(([i, j, w]) => graph.addEdge(artists[i].id, artists[j].id, { weight: w }));
+  // Dynamic Louvain resolution: scales from 1.3 for small libraries up to 2.25 for large libraries
+  // so mega-genres (1,000+ artists) naturally resolve into authentic sub-communities (Synthpop, R&B, Filmi, Desi Hip Hop, Punjabi)
+  // rather than collapsing into 2 giant monolithic blobs.
+  const resolution = Math.max(1.3, Math.min(2.25, 1.3 + Math.log10(Math.max(1, artists.length / 300)) * 0.90));
   const communityOf = graph.size > 0
-    ? louvain(graph, { getEdgeWeight: 'weight', resolution: LOUVAIN_RESOLUTION, rng: mulberry32(42) })
+    ? louvain(graph, { getEdgeWeight: 'weight', resolution, rng: mulberry32(42) })
     : {};
 
   const label = new Int32Array(n).fill(-1);
@@ -394,8 +400,10 @@ export function clusterArtists(artists, collabs, together = new Map()) {
   // Dissolve or merge splinter clusters (< minClusterSize). Setting isolated splinters
   // to -1 turns them into orphans so co-listening (`togetherScore`) places them into
   // major clusters instead of leaving 2-artist or 3-artist micro-clusters!
+  // Scales smoothly: small libraries require at least 6 artists; large libraries scale up
+  // to 20 artists so genuine sub-scenes (25-50 artists) are protected rather than merged.
   const placedCount = label.filter(c => c >= 0).length;
-  const minClusterSize = Math.max(6, Math.round(placedCount * 0.025));
+  const minClusterSize = Math.max(6, Math.min(20, Math.round(placedCount * 0.009)));
   for (let round = 0; round < 50; round++) {
     const sizes = sizesOf();
     if (sizes.size <= 1) break;

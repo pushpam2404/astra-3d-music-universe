@@ -15,7 +15,7 @@ const SPOTIFY_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — protects against
 
 const INITIAL_CLIENT_ENRICH_BATCH = 50;
 const INITIAL_CLIENT_ENRICH_CONCURRENCY = 3; // Top 150 artists enriched in parallel (~2.5 KB/req) before first render
-const MAX_POST_KNOWN_META = 1200;
+const MAX_POST_KNOWN_META = 8000;
 
 export function getCachedSpotifySignals(forceRefresh = false) {
   if (forceRefresh) return null;

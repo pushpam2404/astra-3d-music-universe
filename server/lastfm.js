@@ -27,8 +27,20 @@ const MIN_TAG_WEIGHT = 8;
 const cache = new Map();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+let warnedInvalidKey = false;
+
 export function isLastfmConfigured() {
-  return Boolean(process.env.LASTFM_API_KEY);
+  const k = (process.env.LASTFM_API_KEY || '').trim();
+  // A valid Last.fm API key is a 32-character hexadecimal MD5 string
+  return Boolean(k && k.length >= 24 && /^[0-9a-fA-F]+$/.test(k));
+}
+
+export function getLastfmConfigWarning() {
+  const k = (process.env.LASTFM_API_KEY || '').trim();
+  if (k && !isLastfmConfigured()) {
+    return `LASTFM_API_KEY in .env ("${k}") is not a valid 32-character hex key (it looks like a username or placeholder). Get a free API key at https://www.last.fm/api/account/create.`;
+  }
+  return null;
 }
 
 // A track needs at least this many useful tags to be trusted over the artist page.
@@ -38,13 +50,17 @@ const MIN_TRACK_TAGS = 1;
 const cleanTrackName = (t) => t.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+-\s+.*$/, '').trim();
 
 async function lastfmTags(method, params, artistName) {
-  const query = new URLSearchParams({ method, api_key: process.env.LASTFM_API_KEY, format: 'json', autocorrect: '1', ...params });
+  const key = (process.env.LASTFM_API_KEY || '').trim();
+  const query = new URLSearchParams({ method, api_key: key, format: 'json', autocorrect: '1', ...params });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(`${API}?${query}`, { signal: controller.signal, headers: { 'User-Agent': 'ASTRA-music-universe/1.0' } });
     const json = await res.json().catch(() => ({}));
     if (json.error === 29) throw Object.assign(new Error('rate limited'), { rateLimited: true });
+    if (json.error === 10 || json.error === 4) {
+      throw Object.assign(new Error(`Invalid Last.fm API key (${json.message || 'error 10'}). Please obtain a 32-character key at https://www.last.fm/api/account/create`), { invalidKey: true });
+    }
     if (json.error) return [];
     const tags = (json.toptags?.tag || []).map(t => ({ name: t.name, count: Number(t.count) }));
     return usefulTags(tags, artistName, { max: 6, minCount: MIN_TAG_WEIGHT });
@@ -70,7 +86,14 @@ async function topTags({ name, track }) {
 export async function fetchLastfmTags(artists, budgetMs) {
   const tagsById = new Map();
   const viaById = new Map();
-  if (!isLastfmConfigured() || artists.length === 0) return { tagsById, viaById, looked: 0, viaTrack: 0, skipped: 0 };
+  const warning = getLastfmConfigWarning();
+  if (warning && !warnedInvalidKey) {
+    warnedInvalidKey = true;
+    console.warn(`[lastfm] ${warning}`);
+  }
+  if (!isLastfmConfigured() || artists.length === 0) {
+    return { tagsById, viaById, looked: 0, viaTrack: 0, skipped: artists.length, ...(warning ? { error: warning } : {}) };
+  }
 
   const now = Date.now();
   const queue = [];
@@ -87,9 +110,10 @@ export async function fetchLastfmTags(artists, budgetMs) {
   let looked = 0;
   let viaTrack = 0;
   let rateLimited = false;
+  let invalidKeyError = null;
   let next = 0;
   const worker = async () => {
-    while (next < queue.length && Date.now() < deadline && !rateLimited) {
+    while (next < queue.length && Date.now() < deadline && !rateLimited && !invalidKeyError) {
       const a = queue[next++];
       const started = Date.now();
       try {
@@ -100,7 +124,12 @@ export async function fetchLastfmTags(artists, budgetMs) {
         looked++;
         if (via === 'track') viaTrack++;
       } catch (err) {
-        if (err.rateLimited) rateLimited = true;
+        if (err.rateLimited) {
+          rateLimited = true;
+        } else if (err.invalidKey) {
+          invalidKeyError = err.message;
+          console.warn('[lastfm]', err.message);
+        }
       }
       const wait = MIN_INTERVAL_PER_WORKER_MS - (Date.now() - started);
       if (wait > 0) await sleep(wait);
@@ -109,5 +138,6 @@ export async function fetchLastfmTags(artists, budgetMs) {
   await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   const skipped = queue.length - looked;
-  return { tagsById, viaById, looked, viaTrack, skipped, ...(rateLimited ? { error: 'Last.fm rate limit reached' } : {}) };
+  const errorMsg = invalidKeyError || (rateLimited ? 'Last.fm rate limit reached' : undefined);
+  return { tagsById, viaById, looked, viaTrack, skipped, ...(errorMsg ? { error: errorMsg } : {}) };
 }

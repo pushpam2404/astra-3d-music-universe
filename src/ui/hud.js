@@ -71,7 +71,16 @@ export function updateEnrichmentStatus({ waitingCount = 0, readyOnReloadCount = 
 
   const btn = statusEl.querySelector('[data-enrich-reload]');
   if (btn) {
-    btn.onclick = typeof onApply === 'function' ? onApply : () => window.location.reload();
+    btn.onclick = (e) => {
+      e?.preventDefault();
+      btn.disabled = true;
+      btn.textContent = 'Applying...';
+      if (typeof onApply === 'function') {
+        onApply();
+      } else {
+        window.location.reload();
+      }
+    };
   }
 }
 
@@ -294,13 +303,15 @@ export class Hud {
 
     const bindSlider = (id, label, format, onChange) => {
       const input = $(id);
+      if (!input) return;
       try {
         const saved = localStorage.getItem(`astra_${id}`);
         if (saved !== null) input.value = saved;
       } catch { /* storage unavailable */ }
       const apply = () => {
         const v = Number(input.value);
-        $(label).textContent = format(v);
+        const lbl = $(label);
+        if (lbl) lbl.textContent = format(v);
         onChange(v);
         try { localStorage.setItem(`astra_${id}`, input.value); } catch { /* ignore */ }
       };
@@ -309,7 +320,6 @@ export class Hud {
     };
     this.applyInitialSettings = [];
 
-    bindSlider('glow-slider', 'glow-val', v => `${Math.round(v * 100)}%`, v => this.cb.onGlow(v));
     bindSlider('orbit-speed-slider', 'orbit-speed-val', v => (v === 0 ? 'paused' : `${v}×`), v => this.cb.onOrbitSpeed(v));
     bindSlider('cluster-spread-slider', 'cluster-spread-val', v => `${v.toFixed(2).replace(/\.?0+$/, '')}×`, v => this.cb.onClusterSpread?.(v));
     $('node-scale-slider').addEventListener('input', (e) => {
@@ -527,7 +537,7 @@ export class Hud {
         return li;
       }));
 
-    staggerRevealItems(list, 'li', { limit: 25, staggerDelay: 0.015 });
+    staggerRevealItems(list, 'li', { limit: 35, staggerDelay: 0.015 });
     this.renderMemoriesView();
     this.renderSongsBrowser();
   }

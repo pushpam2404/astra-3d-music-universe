@@ -99,12 +99,12 @@ export function getDistinctClusterColor(index) {
   return oklchToHex(lightness, chroma, hue);
 }
 
-export const ORDERED_CLUSTER_COLORS = Array.from({ length: 24 }, (_, i) => getDistinctClusterColor(i));
+export const ORDERED_CLUSTER_COLORS = Array.from({ length: 32 }, (_, i) => getDistinctClusterColor(i));
 export const CLUSTER_COLORS = ORDERED_CLUSTER_COLORS;
 
 export const GENRE_FAMILIES = {
   hiphop:     { label: 'Hip-Hop & Rap',      color: ORDERED_CLUSTER_COLORS[0],  keywords: ['hip hop', 'rap', 'trap', 'drill', 'grime', 'boom bap', 'gangsta', 'horrorcore', 'crunk', 'phonk', 'emo rap'] },
-  southasian: { label: 'South Asian',        color: ORDERED_CLUSTER_COLORS[1],  keywords: ['bollywood', 'filmi', 'punjabi', 'bhangra', 'qawwali', 'sufi', 'indian', 'hindi', 'ghazal', 'hindustani', 'carnatic', 'desi', 'urdu', 'pakistani', 'tamil', 'telugu', 'kannada', 'malayalam', 'marathi', 'bengali', 'haryanvi', 'tollywood', 'kollywood'] },
+  southasian: { label: 'South Asian',        color: ORDERED_CLUSTER_COLORS[1],  keywords: ['bollywood', 'filmi', 'punjabi', 'bhangra', 'qawwali', 'sufi', 'indian', 'hindi', 'ghazal', 'hindustani', 'carnatic', 'desi', 'urdu', 'pakistani', 'tamil', 'telugu', 'kannada', 'malayalam', 'marathi', 'bengali', 'haryanvi', 'bhojpuri', 'hindie', 'indian indie', 'coke studio', 'tollywood', 'kollywood'] },
   pop:        { label: 'Pop',                color: ORDERED_CLUSTER_COLORS[2],  keywords: ['pop', 'boy band', 'girl group', 'teen', 'adult contemporary'] },
   rock:       { label: 'Rock & Indie',       color: ORDERED_CLUSTER_COLORS[3],  keywords: ['rock', 'indie', 'alternative', 'punk', 'grunge', 'shoegaze', 'psychedel', 'neo psychedel', 'britpop', 'emo', 'new wave', 'post punk', 'garage', 'dream pop'] },
   electronic: { label: 'Electronic & Dance', color: ORDERED_CLUSTER_COLORS[4],  keywords: ['electro', 'edm', 'house', 'techno', 'trance', 'dubstep', 'drum and bass', 'dnb', 'bass music', 'synthwave', 'future bass', 'ambient', 'downtempo', 'idm', 'big room', 'moombahton', 'dance', 'trip hop', 'chillwave', 'lo fi', 'lofi', 'french touch', 'synth'] },
@@ -154,7 +154,9 @@ const GENRE_ALIASES = {
   'singer/songwriter': 'singer songwriter',
   'alt rock': 'alternative rock',
   'alternative': 'alternative rock',
-  'indie': 'indie pop'
+  'indie': 'indie pop',
+  'indian indie': 'hindie',
+  'hindi indie': 'hindie'
 };
 
 /** "Hip-hop music" → "hip hop"; "Indian film music" → "filmi" */
@@ -176,13 +178,29 @@ export function familiesForGenre(genre) {
   return hits;
 }
 
-/** Sums family membership over a list of genres into a normalized { familyId: weight } vector. */
-export function familyVector(genres) {
+const COUNTRY_TO_FAMILY = {
+  india: 'southasian', pakistan: 'southasian', bangladesh: 'southasian', nepal: 'southasian', 'sri lanka': 'southasian',
+  'south korea': 'asianpop', japan: 'asianpop',
+  brazil: 'latin', mexico: 'latin', colombia: 'latin', argentina: 'latin', 'puerto rico': 'latin', chile: 'latin', cuba: 'latin'
+};
+
+/** Sums family membership over a list of genres and optional countries into a normalized { familyId: weight } vector. */
+export function familyVector(genres = [], countries = []) {
   const vec = {};
-  genres.forEach(g => {
+  (genres || []).forEach(g => {
     const fams = familiesForGenre(g);
     fams.forEach(f => { vec[f] = (vec[f] || 0) + 1 / fams.length; });
   });
+
+  // Regional origins provide family context (weight 0.40 if genres exist, 1.0 if tagless)
+  const countryWeight = Object.keys(vec).length > 0 ? 0.40 : 1.0;
+  (countries || []).forEach(c => {
+    const fam = COUNTRY_TO_FAMILY[String(c).toLowerCase().trim()];
+    if (fam) {
+      vec[fam] = (vec[fam] || 0) + countryWeight;
+    }
+  });
+
   const total = Object.values(vec).reduce((s, v) => s + v, 0);
   if (total > 0) Object.keys(vec).forEach(k => { vec[k] /= total; });
   return vec;

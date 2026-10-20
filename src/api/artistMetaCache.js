@@ -25,9 +25,32 @@ export function loadArtistMeta() {
 export function saveArtistMeta(newEntries) {
   if (!newEntries || !Object.keys(newEntries).length) return;
   try {
-    const all = { ...loadArtistMeta(), ...newEntries };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
-  } catch {
-    // Storage full or blocked (private mode): lookups just run again next time.
+    const all = loadArtistMeta();
+    for (const [id, val] of Object.entries(newEntries)) {
+      if (val && typeof val === 'object') {
+        all[id] = {
+          g: Array.isArray(val.g) ? val.g : [],
+          c: Array.isArray(val.c) ? val.c : [],
+          t: Number(val.t) || Date.now(),
+          ...(val.l ? { l: Number(val.l) } : {})
+        };
+      }
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    } catch (quotaErr) {
+      console.warn('[artistMetaCache] localStorage quota hit, pruning oldest empty entries:', quotaErr.message);
+      const sortedKeys = Object.keys(all).sort((a, b) => {
+        const aHas = all[a].g?.length ? 1 : 0;
+        const bHas = all[b].g?.length ? 1 : 0;
+        if (aHas !== bHas) return aHas - bHas;
+        return (all[a].t || 0) - (all[b].t || 0);
+      });
+      const dropCount = Math.ceil(sortedKeys.length * 0.25);
+      for (let i = 0; i < dropCount; i++) delete all[sortedKeys[i]];
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+    }
+  } catch (err) {
+    console.warn('[artistMetaCache] save failed:', err);
   }
 }

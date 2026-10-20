@@ -12,10 +12,10 @@ import { normalizeGenre, OCCUPATION_GENRES } from '../src/config/genreTaxonomy.j
 import { fetchWikidataArtistMeta } from './genreEnrichment.js';
 import { fetchMusicBrainzArtistMeta } from './musicbrainz.js';
 import { fetchLastfmTags, isLastfmConfigured } from './lastfm.js';
-import { tagsContradictCountry } from './places.js';
+import { tagsContradictCountry, isPurePlaceTag, tagToCountry } from './places.js';
 
 // Bump when the Last.fm lookup method changes, so browsers re-check their cached artists.
-export const LASTFM_METHOD_VERSION = 3;
+export const LASTFM_METHOD_VERSION = 4;
 // Same cap for fresh and remembered genres, so a cached load clusters identically.
 export const MAX_GENRES_PER_ARTIST = 16;
 // Client-cached metadata is trusted this long; "nothing found" is rechecked sooner.
@@ -24,10 +24,15 @@ const KNOWN_EMPTY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** True when the browser's cached entry can be used as-is. */
 export function isFreshMeta(m) {
-  return Boolean(m && Array.isArray(m.g)
-    // Entries learned with an older Last.fm method (or before it was configured) are re-checked.
-    && !(isLastfmConfigured() && !(Number(m.l) >= LASTFM_METHOD_VERSION))
-    && Date.now() - (Number(m.t) || 0) < (m.g.length ? KNOWN_META_TTL_MS : KNOWN_EMPTY_TTL_MS));
+  if (!m || !Array.isArray(m.g)) return false;
+  const age = Date.now() - (Number(m.t) || 0);
+  const ttl = m.g.length ? KNOWN_META_TTL_MS : KNOWN_EMPTY_TTL_MS;
+  if (age >= ttl) return false;
+  // If entry already has known genres, it is valid and fresh!
+  if (m.g.length > 0) return true;
+  // If empty and Last.fm is configured, ensure it was checked with a supported Last.fm version
+  if (isLastfmConfigured() && Number(m.l || 0) < 3) return false;
+  return true;
 }
 
 /** knownMeta comes from the browser: keep only well-formed strings. */
@@ -70,10 +75,22 @@ export async function enrichArtists(artists, budgetMs) {
       lfTags = [];
       rejectedSameName++;
     }
-    const raw = [...w.genres, ...lfTags, ...(w.genres.length || lfTags.length ? [] : m.tags)];
+    const activeCountries = [...countries];
+    const candidateTags = [...w.genres, ...lfTags, ...(w.genres.length || lfTags.length ? [] : m.tags)];
+    const musicalTags = [];
+    candidateTags.forEach(t => {
+      if (isPurePlaceTag(t)) {
+        if (!activeCountries.length) {
+          const inferred = tagToCountry(t);
+          if (inferred && !activeCountries.includes(inferred)) activeCountries.push(inferred);
+        }
+      } else {
+        musicalTags.push(t);
+      }
+    });
     const implied = w.occupations.map(o => OCCUPATION_GENRES[o.toLowerCase()]).filter(Boolean);
-    const genres = [...new Set([...raw, ...implied].map(normalizeGenre))].slice(0, MAX_GENRES_PER_ARTIST);
-    meta.set(a.id, { g: genres, c: countries });
+    const genres = [...new Set([...musicalTags, ...implied].map(normalizeGenre))].slice(0, MAX_GENRES_PER_ARTIST);
+    meta.set(a.id, { g: genres, c: activeCountries });
     // Complete unless Last.fm still owes us a lookup for this artist.
     if (!(lastfmOn && !lf.tagsById.has(a.id))) done.add(a.id);
   });

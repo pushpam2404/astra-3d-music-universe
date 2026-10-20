@@ -51,3 +51,28 @@ export function tagsContradictCountry(tags, knownCountries) {
   const tagged = tags.map(t => groupOf.get(t.toLowerCase())).filter(k => k !== undefined);
   return tagged.length > 0 && tagged.every(k => !known.has(k));
 }
+
+// Words derived from regions/languages that represent authentic musical styles/traditions
+export const MUSICAL_STYLE_WORDS = new Set([
+  'punjabi', 'bhangra', 'qawwali', 'filmi', 'bollywood', 'ghazal', 'sufi',
+  'flamenco', 'samba', 'bossa nova', 'cumbia', 'bachata', 'salsa', 'reggaeton',
+  'k pop', 'j pop', 'c pop', 'city pop', 'afrobeats', 'amapiano', 'bhojpuri', 'haryanvi'
+]);
+
+export function isPurePlaceTag(tag) {
+  const t = String(tag || '').toLowerCase().trim();
+  if (MUSICAL_STYLE_WORDS.has(t)) return false;
+  return PLACE_TAGS.has(t);
+}
+
+export function tagToCountry(tag) {
+  const t = String(tag || '').toLowerCase().trim();
+  for (const [country, demonym] of Object.entries(DEMONYMS)) {
+    if (t === country.toLowerCase() || t === demonym.toLowerCase()) {
+      return country;
+    }
+  }
+  if (t === 'uk' || t === 'england' || t === 'scotland' || t === 'wales' || t === 'british') return 'United Kingdom';
+  if (t === 'usa' || t === 'us' || t === 'america' || t === 'american') return 'United States';
+  return null;
+}
