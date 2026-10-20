@@ -62,9 +62,9 @@ Any AI agent modifying Astra **must** preserve these invariants:
 * UI indicators (`.cluster-swatch`, `.label-dot`, `.chip-dot` in `src/style.css`) also carry a `1.5px solid rgba(0, 0, 0, 0.88)` border with no blurry colored box-shadow on swatches.
 
 ### 3.5 Perceptually Distinct Cluster Palette (OKLab Farthest-Point + OKLCH Golden-Angle)
-* `src/config/genreTaxonomy.js` defines the 24-color `CLUSTER_COLORS` palette and precomputes `ORDERED_CLUSTER_COLORS` via greedy farthest-point sampling in **OKLab** perceptual space (`buildFarthestPointPalette`).
+* `src/config/genreTaxonomy.js` defines the 32-color `CLUSTER_COLORS` palette and precomputes `ORDERED_CLUSTER_COLORS` via greedy farthest-point sampling in **OKLab** perceptual space (`buildFarthestPointPalette`).
 * Clusters are sorted by size/plays descending in `server/clusterNaming.js` and `src/etl/graphNormalizer.js`, and assigned colors via `getDistinctClusterColor(index)` so the largest clusters always receive maximally distant colors and never collide.
-* If a universe has more than 24 clusters, `getDistinctClusterColor(index)` generates additional gamut-clamped colors in **OKLCH** using a `137.5°` golden-angle hue step (`oklchToHex`) rather than wrapping around with `%`.
+* If a universe has more than 32 clusters, `getDistinctClusterColor(index)` generates additional gamut-clamped colors in **OKLCH** using a `137.5°` golden-angle hue step (`oklchToHex`) rather than wrapping around with `%`.
 
 ### 3.6 Strict Lens & Focus Culling (Zero Orphan Lines or Floating Labels)
 * **In `CelestialFactory.updateFocus` (`src/renderer/celestialFactory.js`)**:
@@ -80,6 +80,21 @@ Any AI agent modifying Astra **must** preserve these invariants:
 
 ### 3.7 3D Planet Collision Clearance
 * `src/physics/galaxyLayout.js` runs `resolveClusterArtistOverlaps` per cluster and `resolveArtistCollisions(artists, 18)` globally so no two artist planets overlap and no artist clips into its central cluster planet (`coreRadius`).
+
+### 3.8 Dynamic Cluster Scaling & Consensus Cluster Naming
+* **Dynamic Resolution & Cluster Scaling (`server/clustering.js`)**:
+  * Louvain resolution dynamically scales with library volume ($1.3$ to $2.25$) so large libraries naturally resolve into authentic sub-communities (Hindie, Filmi, Punjabi & Bhangra, Desi Hip-Hop, Synthpop, Ambient) rather than collapsing into monolithic blobs.
+  * Cluster count dynamically scales from 8 to 22 ($\approx 8 + \sqrt{\max(0, \text{artists} - 100)} \times 0.21$).
+* **Consensus-Driven Naming (`server/clusterNaming.js`)**:
+  * Outlier tags ($< 3$ artists or $< 15\%$ support among genre-known members) cannot name a cluster.
+  * Lift is clamped to $\le 14$ and consensus support is exponentially weighted ($\text{Support}^{1.35}$) to eliminate 1-off niche tag hijacking.
+  * **Never** use `Artist & Co.` titles. All clusters are named after authentic musical genres, regional crossover scenes, mood/sonic textures, or cosmic universe archetypes.
+* **Country vs Genre Separation (`server/enrich.js`, `server/places.js`)**:
+  * Pure place tags (`India`, `Pakistan`, `UK`, `USA`) are extracted to `countries` and omitted from `genres`, preventing country names from surfacing as musical subgenres in the UI.
+* **Metadata Caching & POST Ceiling (`src/api/backendClient.js`, `server/enrich.js`, `src/api/artistMetaCache.js`)**:
+  * `MAX_POST_KNOWN_META` is set to 8,000 so large libraries transmit full metadata to `/api/universe` without truncation loops.
+  * `isFreshMeta` treats all cached entries with valid genres as permanently fresh.
+  * `saveArtistMeta` automatically recovers from `localStorage` quota errors via oldest-entry pruning.
 
 ---
 
