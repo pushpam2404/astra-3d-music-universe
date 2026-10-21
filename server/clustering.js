@@ -679,6 +679,7 @@ export function clusterArtists(artists, collabs, together = new Map(), { nameabl
     genreGroups.get(g).push(id);
   }));
 
+  const stats = { louvainGroups: groups.size, genreGroups: genreGroups.size, merges: 0 };
   // Two groups that can only be told apart by an invented name are one genre group.
   let groupList = [...genreGroups.values()];
   let described = describeClusters(groupList, uncharted, byId, n, nameable);
@@ -688,6 +689,7 @@ export function clusterArtists(artists, collabs, together = new Map(), { nameabl
     const target = byClusterId.get(dup.duplicateOf) || described.find(c => c !== dup && c.family !== UNCLASSIFIED_FAMILY.id);
     if (!target) break;
     target.members.push(...dup.members);
+    stats.merges++;
     groupList = described.filter(c => c !== dup && c.family !== UNCLASSIFIED_FAMILY.id).map(c => c.members);
     described = describeClusters(groupList, uncharted, byId, n, nameable);
   }
@@ -748,5 +750,5 @@ export function clusterArtists(artists, collabs, together = new Map(), { nameabl
   const positions = new Map();
   if (embedding) artists.forEach((a, i) => positions.set(a.id, embedding[i]));
 
-  return { clusters: described, assignment, affinityMatrix, positions, doubtedGenres };
+  return { clusters: described, assignment, affinityMatrix, positions, doubtedGenres, stats };
 }

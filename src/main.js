@@ -484,6 +484,7 @@ async function initApp() {
       });
       saveArtistMeta(artistMeta);
       console.info('[Astra] universe diagnostics:', diagnostics);
+      console.info('[Astra] clustering:', JSON.stringify({ ...diagnostics.clusterStats, genreSource: diagnostics.genreSource, doubted: diagnostics.doubtedGenres }));
       if (!dataset) {
         loadDemo();
         hud.setNotice('Spotify has no listening data for this account yet.');

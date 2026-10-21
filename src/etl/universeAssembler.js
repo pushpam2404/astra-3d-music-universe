@@ -475,7 +475,7 @@ export function assembleUniverseFromSignals(
 
   const together = listenedTogether(saved, recent, includedIdSet, historySummary?.togetherPairs || [], artistIdByNorm);
   diagnostics.listenedTogetherPairs = together.size;
-  const { clusters, assignment, affinityMatrix, positions, doubtedGenres } = clusterArtists(
+  const { clusters, assignment, affinityMatrix, positions, doubtedGenres, stats: clusterStats } = clusterArtists(
     includedArtists.map(a => ({ id: a.id, name: a.name, ...artistFeatures.get(a.id), score: artistScore.get(a.id) || 1 })),
     collabs,
     together,
@@ -483,6 +483,7 @@ export function assembleUniverseFromSignals(
   );
   diagnostics.clusters = clusters.map(c => `${c.name} (${c.members.length})`);
   diagnostics.doubtedGenres = doubtedGenres.size;
+  diagnostics.clusterStats = clusterStats;
 
   const titleCase = genreTitleCase;
   const artists = includedArtists.map(a => {
