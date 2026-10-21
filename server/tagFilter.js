@@ -4,7 +4,10 @@
  * "favorites", decades, the artist's own name. This keeps the musical ones.
  */
 
-const JUNK_TAG = /artist credit|seen live|favou?rites?|spotify|wikidata|discogs|^[a-z]{1,2}$|\d{2,4}s?\b|vocalists?|^love|awesome|beautiful|amazing|best|my |under \d|listeners|albums? i own|check out|^all$|^good$|^cool$|^sexy$|^chill$|christmas|holiday|xmas/i;
+const JUNK_TAG = /youtubers?|^youtube$|retard|artist credit|seen live|favou?rites?|spotify|wikidata|discogs|^[a-z]{1,2}$|\d{2,4}s?\b|vocalists?|^love|awesome|beautiful|amazing|best|my |under \d|listeners|albums? i own|check out|^all$|^good$|^cool$|^sexy$|^chill$|christmas|holiday|xmas/i;
+
+/** True for community tags that aren't music genres (also applied to cached tags). */
+export const isJunkTag = (tag) => JUNK_TAG.test(String(tag));
 
 const squash = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 

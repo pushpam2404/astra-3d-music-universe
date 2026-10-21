@@ -15,7 +15,7 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
 
   // Sort non-uncharted clusters by size/plays descending to assign greedy farthest-point colors in size order
   const rankedGenres = genres
-    .filter(g => g.family !== UNCLASSIFIED_FAMILY.id && g.name !== 'Uncharted')
+    .filter(g => g.family !== UNCLASSIFIED_FAMILY.id && g.name !== UNCLASSIFIED_FAMILY.label)
     .slice()
     .sort((a, b) => (b.basePlays || 0) - (a.basePlays || 0));
 
@@ -29,7 +29,7 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
     ...genres.map(g => ({
       ...g,
       type: 'genre',
-      color: (g.family === UNCLASSIFIED_FAMILY.id || g.name === 'Uncharted')
+      color: (g.family === UNCLASSIFIED_FAMILY.id || g.name === UNCLASSIFIED_FAMILY.label)
         ? UNCLASSIFIED_FAMILY.color
         : (assignedColorById.get(g.id) || g.color || getDistinctClusterColor(0))
     })),

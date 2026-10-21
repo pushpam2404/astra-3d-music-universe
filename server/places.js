@@ -22,7 +22,12 @@ export const DEMONYMS = {
 // Tags that say where, not what.
 export const PLACE_TAGS = new Set([
   ...Object.keys(DEMONYMS), ...Object.values(DEMONYMS),
-  'uk', 'usa', 'us', 'america', 'desi', 'south asian', 'asian', 'european', 'latino', 'african'
+  'uk', 'usa', 'us', 'america', 'desi', 'south asian', 'asian', 'european', 'latino', 'african',
+  // Nationalities seen as bare community tags (a place, not a sound).
+  'croatian', 'serbian', 'bosnian', 'slovenian', 'polish', 'czech', 'slovak', 'hungarian', 'romanian', 'bulgarian',
+  'greek', 'russian', 'ukrainian', 'belarusian', 'lithuanian', 'latvian', 'estonian', 'finnish', 'danish', 'norwegian',
+  'swedish', 'icelandic', 'dutch', 'belgian', 'swiss', 'austrian', 'portuguese', 'italian', 'spanish', 'turkish',
+  'israeli', 'egyptian', 'moroccan', 'nigerian', 'ghanaian', 'south african', 'filipino', 'thai', 'vietnamese', 'malaysian'
 ].map(t => t.toLowerCase()));
 
 // Equivalent country spellings across sources (MusicBrainz, Wikidata, tags).

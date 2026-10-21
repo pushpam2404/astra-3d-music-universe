@@ -6,6 +6,8 @@
  * on the client without hitting serverless payload limits (HTTP 413 on Vercel).
  */
 import { normalizeGenre } from '../config/genreTaxonomy.js';
+import { isJunkTag } from '../../server/tagFilter.js';
+import { PLACE_TAGS } from '../../server/places.js';
 import {
   cleanTrackTitle,
   normalizeArtistKey,
@@ -436,6 +438,8 @@ export function assembleUniverseFromSignals(
       else genreSource.none++;
       if (enriched.done.has(a.id)) artistMeta[a.id] = toCacheEntryFn(found);
     }
+    // Cached tags predate filter fixes: normalize and drop non-genres here too.
+    genres = [...new Set(genres.map(normalizeGenre))].filter(g => !isJunkTag(g) && !PLACE_TAGS.has(g));
     artistGenres.set(a.id, genres);
     artistFeatures.set(a.id, { genres, countries });
   });
@@ -587,7 +591,7 @@ export function assembleUniverseFromSignals(
   diagnostics.artists = artists.length;
   diagnostics.genres = genres.length;
   if (genreSource.none > artists.length / 2 && !enriched.warnings?.length && !diagnostics.pendingArtists.length) {
-    diagnostics.warnings.push(`No genre data found for ${genreSource.none} of ${artists.length} artists; they are grouped by collaborations or placed in Uncharted.`);
+    diagnostics.warnings.push(`No genre data found for ${genreSource.none} of ${artists.length} artists; they join the genre group they're played or credited alongside, or wait under Genre Unknown.`);
   }
 
   const historyMeta = historySummary?.validPlays ? {

@@ -6,8 +6,11 @@
  *
  *   two distinctive genres      → "Psychedelic & Indie Rock", "Filmi & Sufi"
  *   one genre + distinctive home → "Pakistani Pop", "Indian Folk Pop"
- *   no genre data, shared home   → "Pakistani Scene"
- *   nothing to go on             → "Atif Aslam & Co." (named after its biggest artist)
+ *
+ * Every name comes from genre tags the members really have (Wikidata, MusicBrainz,
+ * Last.fm) or from their genre families. Never moods, invented themes or artist names.
+ * When no unused genre name is left, the cluster is reported as `duplicateOf` the
+ * cluster holding its best name, and clustering merges the two (same genre = same group).
  */
 import {
   familyInfo,
@@ -70,7 +73,7 @@ export function describeClusters(clusters, uncharted, byId, n) {
   genreKnownN = Math.max(1, genreKnownN || n);
   countryKnownN = Math.max(1, countryKnownN || n);
 
-  const usedNames = new Set();
+  const usedNames = new Map(); // lower-case name → cluster id
   const described = [];
 
   const sortedClusters = clusters
@@ -89,25 +92,6 @@ export function describeClusters(clusters, uncharted, byId, n) {
       new Set(a.genres).forEach(g => genreCount.set(g, (genreCount.get(g) || 0) + 1));
       new Set(a.countries).forEach(c => countryCount.set(c, (countryCount.get(c) || 0) + 1));
     });
-
-    // 1. Compute cluster audio features for sonic mood profiling
-    let avgEnergy = 0, avgValence = 0, avgDance = 0, avgAcoustic = 0, countWithAudio = 0;
-    members.forEach(id => {
-      const a = byId.get(id);
-      if (a && a.energy !== undefined && a.energy !== null) {
-        avgEnergy += a.energy;
-        avgValence += a.valence;
-        avgDance += a.dance;
-        avgAcoustic += a.acoustic;
-        countWithAudio++;
-      }
-    });
-    if (countWithAudio > 0) {
-      avgEnergy /= countWithAudio;
-      avgValence /= countWithAudio;
-      avgDance /= countWithAudio;
-      avgAcoustic /= countWithAudio;
-    }
 
     // 2. Identify top genre families
     const sortedFams = Object.entries(famScore).sort((x, y) => y[1] - x[1]);
@@ -185,61 +169,36 @@ export function describeClusters(clusters, uncharted, byId, n) {
     else if (primaryFamId === 'rock' && secondaryFamId === 'metal') famPairs.push('Alternative Metal', 'Heavy Rock');
     candidates.push(...famPairs);
 
-    // Level C: Demonym + Family label
-    if (demonym) {
-      const isRedundant = (primaryFam.id === 'southasian' && (demonym === 'Indian' || demonym === 'Pakistani')) ||
-                          (primaryFam.id === 'asianpop' && (demonym === 'Korean' || demonym === 'Japanese'));
-      const homeFam = isRedundant ? `${demonym} Pop` : `${demonym} ${primaryFam.label}`;
+    // Level C: Demonym + genre family, when the family doesn't already say the place.
+    const familySaysPlace = ['southasian', 'asianpop', 'latin'].includes(primaryFamId);
+    if (demonym && primaryFamId && primaryFamId !== OTHER_FAMILY.id && !familySaysPlace) {
+      const homeFam = `${demonym} ${primaryFam.label}`;
       if (homeFam.length <= MAX_NAME_LENGTH) candidates.push(homeFam);
-      candidates.push(`${demonym} Sounds`, `${demonym} Scene`);
-    }
-
-    // Level D: Mood / Sonic Texture + Genre Family
-    const moodDescriptors = [];
-    if (avgAcoustic > 0.45) moodDescriptors.push('Acoustic', 'Unplugged');
-    if (avgEnergy > 0.72) moodDescriptors.push('Energetic', 'Driving', 'Electric');
-    else if (avgEnergy < 0.44) moodDescriptors.push('Atmospheric', 'Chill', 'Ambient', 'Downtempo');
-    if (avgValence < 0.38) moodDescriptors.push('Moody', 'Late Night', 'Melancholy');
-    else if (avgValence > 0.65) moodDescriptors.push('Uplifting', 'Feel-Good', 'Vibrant');
-    if (avgDance > 0.68) moodDescriptors.push('Rhythmic', 'Club', 'Groove');
-    moodDescriptors.push('Melodic', 'Modern', 'Underground', 'Alternative', 'Deep');
-
-    const baseGenreName = ranked[0]?.g ? titleCase(ranked[0].g) : primaryFam.label;
-    for (const mood of moodDescriptors) {
-      const moodCandidate = `${mood} ${baseGenreName}`;
-      if (moodCandidate.length <= MAX_NAME_LENGTH) candidates.push(moodCandidate);
-      if (secondaryFam) {
-        const moodFam = `${mood} ${secondaryFam.label}`;
-        if (moodFam.length <= MAX_NAME_LENGTH) candidates.push(moodFam);
-      }
     }
 
     // Level E: Primary and Secondary Family combinations
-    if (primaryFam.label && primaryFam.label !== 'Eclectic') {
+    if (primaryFamId && primaryFamId !== OTHER_FAMILY.id) {
       candidates.push(primaryFam.label);
-      if (secondaryFam && secondaryFam.label !== 'Eclectic') {
+      if (secondaryFam && secondaryFamId !== OTHER_FAMILY.id) {
         const joined = `${primaryFam.label} & ${secondaryFam.label}`;
         if (joined.length <= MAX_NAME_LENGTH) candidates.push(joined);
       }
     }
 
-    // Level F: Sonic Universe Archetypes (last-resort fallbacks that never use artist names)
-    candidates.push(
-      `${primaryFam.label || 'Sonic'} Odyssey`,
-      `${primaryFam.label || 'Melodic'} Realm`,
-      `${primaryFam.label || 'Eclectic'} Fusion`,
-      `${primaryFam.label || 'Global'} Wave`,
-      `Atmospheric Frequencies`,
-      `Resonant Soundscape`,
-      `Harmonic Echoes`,
-      `Celestial Beats`,
-      `Midnight Frequency ${clusterIdx + 1}`
-    );
+    // Last real-genre options: any two of the cluster's supported genres.
+    for (let i = 0; i < ranked.length; i++) {
+      for (let j = i + 1; j < ranked.length; j++) {
+        if (!overlaps(ranked[i].g, ranked[j].g)) candidates.push(joinGenres(titleCase(ranked[i].g), titleCase(ranked[j].g)));
+      }
+    }
 
-    const name = candidates.find(c => c.length <= MAX_NAME_LENGTH && !usedNames.has(c.toLowerCase()))
-      || candidates.find(c => !usedNames.has(c.toLowerCase()))
-      || `${primaryFam.label || 'Genre'} Cluster ${clusterIdx + 1}`;
-    usedNames.add(name.toLowerCase());
+    const free = candidates.find(c => c.length <= MAX_NAME_LENGTH && !usedNames.has(c.toLowerCase()))
+      || candidates.find(c => !usedNames.has(c.toLowerCase()));
+    // No genre name of its own: by genre it is the same group as the one holding its best name.
+    const duplicateOf = free ? null : (usedNames.get(candidates[0]?.toLowerCase()) ?? described[0]?.id ?? null);
+    const name = free || candidates[0] || null;
+    const clusterId = `cluster_${described.length}_${(primaryFamId ? familyInfo(primaryFamId) : OTHER_FAMILY).id}`;
+    if (free) usedNames.set(free.toLowerCase(), clusterId);
 
     // Family stays as a metadata/text label; each cluster gets a unique maximally-distant color in size order
     const familyId = Object.entries(famScore).sort((x, y) => y[1] - x[1])[0]?.[0];
@@ -247,8 +206,9 @@ export function describeClusters(clusters, uncharted, byId, n) {
     const color = getDistinctClusterColor(clusterIdx);
 
     described.push({
-      id: `cluster_${described.length}_${family.id}`,
+      id: clusterId,
       name,
+      duplicateOf,
       family: family.id,
       familyLabel: family.label,
       color,
@@ -261,7 +221,7 @@ export function describeClusters(clusters, uncharted, byId, n) {
   if (uncharted.length) {
     described.push({
       id: `cluster_${described.length}_${UNCLASSIFIED_FAMILY.id}`,
-      name: 'Uncharted',
+      name: UNCLASSIFIED_FAMILY.label,
       family: UNCLASSIFIED_FAMILY.id,
       familyLabel: 'No genre data found yet',
       color: UNCHARTED_COLOR,

@@ -47,6 +47,8 @@ const EMBED_CLUSTER_WEIGHT = 0.45;
 
 const MAX_CLUSTER_GAP_RATIO = 2.0;
 const MAX_ISOLATION = 1.25;
+// Share of a group's listening that must come from artists with real genre data.
+const MIN_GENRE_SHARE = 0.25;
 const MAX_MEMBER_OUTLIER = 2.1;
 
 function pairHash(i, j) {
@@ -583,7 +585,51 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     if (!groups.has(c)) groups.set(c, []);
     groups.get(c).push(artists[i].id);
   });
-  const described = describeClusters([...groups.values()], uncharted, byId, n);
+  // Groups are genre groups: one needs real genre data among its members to exist.
+  // Members of a group without it join the genre group they're most similar to
+  // (sessions, collaborations, shared tags), or wait under Genre Unknown.
+  const genreKnown = (id) => byId.get(id).genres?.length > 0;
+  // Share is weighted by listening: genres are looked up most-played first, so early
+  // on a group's big artists have genres while its long tail is still pending.
+  const isGenreGroup = (ids) => {
+    const known = ids.filter(genreKnown);
+    const weight = (list) => list.reduce((sum, id) => sum + (byId.get(id).score || 1), 0);
+    return known.length >= Math.min(2, ids.length) && weight(known) >= weight(ids) * MIN_GENRE_SHARE;
+  };
+  const groupOf = new Map();
+  groups.forEach((ids, c) => { if (isGenreGroup(ids)) ids.forEach(id => groupOf.set(id, c)); });
+  for (let pass = 0; pass < 3; pass++) {
+    groups.forEach((ids, c) => ids.forEach(id => {
+      if (groupOf.has(id)) return;
+      const score = new Map();
+      neighbors[byId.get(id).index].forEach(({ j, w }) => {
+        const g = groupOf.get(artists[j].id);
+        if (g !== undefined) score.set(g, (score.get(g) || 0) + w);
+      });
+      const best = [...score].sort((x, y) => y[1] - x[1])[0];
+      if (best && best[1] >= 0.05) groupOf.set(id, best[0]);
+    }));
+  }
+  const genreGroups = new Map();
+  groups.forEach(ids => ids.forEach(id => {
+    const g = groupOf.get(id);
+    if (g === undefined) { uncharted.push(id); return; }
+    if (!genreGroups.has(g)) genreGroups.set(g, []);
+    genreGroups.get(g).push(id);
+  }));
+
+  // Two groups that can only be told apart by an invented name are one genre group.
+  let groupList = [...genreGroups.values()];
+  let described = describeClusters(groupList, uncharted, byId, n);
+  for (let round = 0; round < 20 && described.some(c => c.duplicateOf); round++) {
+    const byClusterId = new Map(described.map(c => [c.id, c]));
+    const dup = described.find(c => c.duplicateOf);
+    const target = byClusterId.get(dup.duplicateOf) || described.find(c => c !== dup && c.family !== UNCLASSIFIED_FAMILY.id);
+    if (!target) break;
+    target.members.push(...dup.members);
+    groupList = described.filter(c => c !== dup && c.family !== UNCLASSIFIED_FAMILY.id).map(c => c.members);
+    described = describeClusters(groupList, uncharted, byId, n);
+  }
 
   const clusterOf = new Map();
   const memberCount = new Map();

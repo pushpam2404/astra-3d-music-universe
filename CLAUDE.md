@@ -88,7 +88,9 @@ Any AI agent modifying Astra **must** preserve these invariants:
 * **Consensus-Driven Naming (`server/clusterNaming.js`)**:
   * Outlier tags ($< 3$ artists or $< 15\%$ support among genre-known members) cannot name a cluster.
   * Lift is clamped to $\le 14$ and consensus support is exponentially weighted ($\text{Support}^{1.35}$) to eliminate 1-off niche tag hijacking.
-  * **Never** use `Artist & Co.` titles. All clusters are named after authentic musical genres, regional crossover scenes, mood/sonic textures, or cosmic universe archetypes.
+  * Names come **only** from genre tags members really have (Wikidata/MusicBrainz/Last.fm) or their genre families, optionally prefixed by a concentrated home country ("Indian Hindie"). **Never** `Artist & Co.` titles, moods derived from `estimatedFeatures` (hash-based, not real audio), or invented themes ("Celestial Beats"). `estimatedFeatures` must never feed naming or UI.
+  * Clusters are genre groups (`clusterArtists` in `server/clustering.js`): a Louvain group exists only if at least `MIN_GENRE_SHARE` (25%) of its listening comes from artists with real genres; members of other groups join the most similar genre group (co-listening, collaborations, tags) or go to **Genre Unknown**. When `describeClusters` can't give a group an unused real-genre name it returns `duplicateOf`, and the two groups merge.
+  * `assembleUniverseFromSignals` re-filters cached tags (`isJunkTag` from `server/tagFilter.js`, `PLACE_TAGS` incl. bare nationalities) so old browser caches can't name clusters with junk.
 * **Country vs Genre Separation (`server/enrich.js`, `server/places.js`)**:
   * Pure place tags (`India`, `Pakistan`, `UK`, `USA`) are extracted to `countries` and omitted from `genres`, preventing country names from surfacing as musical subgenres in the UI.
 * **Metadata Caching & POST Ceiling (`src/api/backendClient.js`, `server/enrich.js`, `src/api/artistMetaCache.js`)**:

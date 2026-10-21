@@ -132,7 +132,7 @@ export const OCCUPATION_GENRES = {
 };
 
 export const OTHER_FAMILY = { id: 'other', label: 'Eclectic', color: ORDERED_CLUSTER_COLORS[12] };
-export const UNCLASSIFIED_FAMILY = { id: 'unclassified', label: 'Uncharted', color: '#6E768C' };
+export const UNCLASSIFIED_FAMILY = { id: 'unclassified', label: 'Genre Unknown', color: '#6E768C' };
 
 const FAMILY_MATCHERS = Object.entries(GENRE_FAMILIES).map(([id, fam]) => ({
   id,
@@ -142,6 +142,7 @@ const FAMILY_MATCHERS = Object.entries(GENRE_FAMILIES).map(([id, fam]) => ({
 
 // Different sources say the same thing differently (Wikidata vs MusicBrainz tags).
 const GENRE_ALIASES = {
+  lofi: 'lo fi',
   'indian film': 'filmi',
   'bollywood': 'filmi',
   'hindi film': 'filmi',
