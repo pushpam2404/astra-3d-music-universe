@@ -1,8 +1,8 @@
 // src/config/genreTaxonomy.js
 /**
- * Maps fine-grained genre strings ("contemporary R&B", "Punjabi music", "neo-psychedelia")
- * onto broad genre families, and provides the OKLab/OKLCH maximally-separable
- * cluster color palette (greedy farthest-point order + 137.5° OKLCH golden-angle overflow).
+ * The OKLab/OKLCH maximally-separable cluster color palette (greedy farthest-point
+ * order + 137.5° OKLCH golden-angle overflow), the "Genre Unknown" bucket, and basic
+ * genre-text normalisation. No genre knowledge lives here; see src/etl/genreSignals.js.
  *
  * Imported by both the backend and browser, so it must stay free of browser APIs.
  */
@@ -102,65 +102,9 @@ export function getDistinctClusterColor(index) {
 export const ORDERED_CLUSTER_COLORS = Array.from({ length: 32 }, (_, i) => getDistinctClusterColor(i));
 export const CLUSTER_COLORS = ORDERED_CLUSTER_COLORS;
 
-export const GENRE_FAMILIES = {
-  hiphop:     { label: 'Hip-Hop & Rap',      color: ORDERED_CLUSTER_COLORS[0],  keywords: ['hip hop', 'rap', 'trap', 'drill', 'grime', 'boom bap', 'gangsta', 'horrorcore', 'crunk', 'phonk', 'emo rap'] },
-  southasian: { label: 'South Asian',        color: ORDERED_CLUSTER_COLORS[1],  keywords: ['bollywood', 'filmi', 'punjabi', 'bhangra', 'qawwali', 'sufi', 'indian', 'hindi', 'ghazal', 'hindustani', 'carnatic', 'desi', 'urdu', 'pakistani', 'tamil', 'telugu', 'kannada', 'malayalam', 'marathi', 'bengali', 'haryanvi', 'bhojpuri', 'hindie', 'indian indie', 'coke studio', 'tollywood', 'kollywood'] },
-  pop:        { label: 'Pop',                color: ORDERED_CLUSTER_COLORS[2],  keywords: ['pop', 'boy band', 'girl group', 'teen', 'adult contemporary'] },
-  rock:       { label: 'Rock & Indie',       color: ORDERED_CLUSTER_COLORS[3],  keywords: ['rock', 'indie', 'alternative', 'punk', 'grunge', 'shoegaze', 'psychedel', 'neo psychedel', 'britpop', 'emo', 'new wave', 'post punk', 'garage', 'dream pop'] },
-  electronic: { label: 'Electronic & Dance', color: ORDERED_CLUSTER_COLORS[4],  keywords: ['electro', 'edm', 'house', 'techno', 'trance', 'dubstep', 'drum and bass', 'dnb', 'bass music', 'synthwave', 'future bass', 'ambient', 'downtempo', 'idm', 'big room', 'moombahton', 'dance', 'trip hop', 'chillwave', 'lo fi', 'lofi', 'french touch', 'synth'] },
-  rnb:        { label: 'R&B & Soul',         color: ORDERED_CLUSTER_COLORS[5],  keywords: ['r&b', 'rnb', 'rhythm and blues', 'soul', 'funk', 'motown', 'disco', 'gospel', 'quiet storm'] },
-  metal:      { label: 'Metal & Heavy',      color: ORDERED_CLUSTER_COLORS[6],  keywords: ['metal', 'metalcore', 'hardcore', 'djent', 'screamo', 'deathcore'] },
-  folk:       { label: 'Folk & Acoustic',    color: ORDERED_CLUSTER_COLORS[7],  keywords: ['folk', 'singer songwriter', 'acoustic', 'country', 'americana', 'bluegrass'] },
-  jazz:       { label: 'Jazz & Blues',       color: ORDERED_CLUSTER_COLORS[8],  keywords: ['jazz', 'blues', 'swing', 'bossa nova', 'lounge', 'bebop', 'fusion'] },
-  classical:  { label: 'Classical & Score',  color: ORDERED_CLUSTER_COLORS[9],  keywords: ['classical', 'orchestra', 'soundtrack', 'film score', 'score', 'opera', 'baroque', 'piano', 'instrumental', 'new age', 'cinematic', 'composer'] },
-  latin:      { label: 'Latin',              color: ORDERED_CLUSTER_COLORS[10], keywords: ['latin', 'reggaeton', 'salsa', 'bachata', 'cumbia', 'urbano', 'regional mexican', 'flamenco', 'samba', 'brazilian', 'sertanejo', 'dembow'] },
-  asianpop:   { label: 'K-Pop & J-Pop',      color: ORDERED_CLUSTER_COLORS[11], keywords: ['k pop', 'j pop', 'c pop', 'mandopop', 'cantopop', 'j rock', 'anime', 'city pop', 'korean', 'japanese'] }
-};
-
-// Wikidata occupations that strongly imply a genre (lowercase occupation label → genre).
-export const OCCUPATION_GENRES = {
-  'rapper': 'hip hop',
-  'playback singer': 'filmi',
-  'music director': 'filmi',
-  'film score composer': 'film score',
-  'film composer': 'film score',
-  'qawwal': 'qawwali',
-  'disc jockey': 'electronic dance',
-  'country singer': 'country',
-  'jazz musician': 'jazz',
-  'opera singer': 'opera'
-};
-
-export const OTHER_FAMILY = { id: 'other', label: 'Eclectic', color: ORDERED_CLUSTER_COLORS[12] };
 export const UNCLASSIFIED_FAMILY = { id: 'unclassified', label: 'Genre Unknown', color: '#6E768C' };
 
-const FAMILY_MATCHERS = Object.entries(GENRE_FAMILIES).map(([id, fam]) => ({
-  id,
-  // Keywords match at a word start: "electro" hits "electropop", "rap" does not hit "trap".
-  regex: new RegExp(`(?:^|[\\s/&,(])(?:${fam.keywords.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`)
-}));
-
-// Different sources say the same thing differently (Wikidata vs MusicBrainz tags).
-const GENRE_ALIASES = {
-  lofi: 'lo fi',
-  'indian film': 'filmi',
-  'bollywood': 'filmi',
-  'hindi film': 'filmi',
-  'film': 'filmi',
-  'rhythm and blues': 'r&b',
-  'rnb': 'r&b',
-  'electronic dance': 'edm',
-  'hiphop': 'hip hop',
-  'rap music': 'rap',
-  'singer/songwriter': 'singer songwriter',
-  'alt rock': 'alternative rock',
-  'alternative': 'alternative rock',
-  'indie': 'indie pop',
-  'indian indie': 'hindie',
-  'hindi indie': 'hindie'
-};
-
-/** "Hip-hop music" → "hip hop"; "Indian film music" → "filmi" */
+/** Basic text normalisation: "Hip-Hop music" → "hip hop". Genre knowledge lives in src/etl/genreSignals.js. */
 export function normalizeGenre(raw) {
   const g = String(raw)
     .toLowerCase()
@@ -168,47 +112,5 @@ export function normalizeGenre(raw) {
     .replace(/\s+music$/, '')
     .replace(/\s+/g, ' ')
     .trim();
-  return GENRE_ALIASES[g] || g;
-}
-
-/** Returns the family ids a single normalized genre belongs to. */
-export function familiesForGenre(genre) {
-  const hits = FAMILY_MATCHERS.filter(m => m.regex.test(genre)).map(m => m.id);
-  // "k pop" also matches plain "pop"; the more specific family wins.
-  if (hits.includes('asianpop')) return hits.filter(h => h !== 'pop');
-  return hits;
-}
-
-const COUNTRY_TO_FAMILY = {
-  india: 'southasian', pakistan: 'southasian', bangladesh: 'southasian', nepal: 'southasian', 'sri lanka': 'southasian',
-  'south korea': 'asianpop', japan: 'asianpop',
-  brazil: 'latin', mexico: 'latin', colombia: 'latin', argentina: 'latin', 'puerto rico': 'latin', chile: 'latin', cuba: 'latin'
-};
-
-/** Sums family membership over a list of genres and optional countries into a normalized { familyId: weight } vector. */
-export function familyVector(genres = [], countries = []) {
-  const vec = {};
-  (genres || []).forEach(g => {
-    const fams = familiesForGenre(g);
-    fams.forEach(f => { vec[f] = (vec[f] || 0) + 1 / fams.length; });
-  });
-
-  // Regional origins provide family context (weight 0.40 if genres exist, 1.0 if tagless)
-  const countryWeight = Object.keys(vec).length > 0 ? 0.40 : 1.0;
-  (countries || []).forEach(c => {
-    const fam = COUNTRY_TO_FAMILY[String(c).toLowerCase().trim()];
-    if (fam) {
-      vec[fam] = (vec[fam] || 0) + countryWeight;
-    }
-  });
-
-  const total = Object.values(vec).reduce((s, v) => s + v, 0);
-  if (total > 0) Object.keys(vec).forEach(k => { vec[k] /= total; });
-  return vec;
-}
-
-export function familyInfo(id) {
-  if (GENRE_FAMILIES[id]) return { id, ...GENRE_FAMILIES[id] };
-  if (id === UNCLASSIFIED_FAMILY.id) return UNCLASSIFIED_FAMILY;
-  return OTHER_FAMILY;
+  return g;
 }

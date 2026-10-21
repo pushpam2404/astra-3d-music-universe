@@ -4,7 +4,7 @@
  *
  * 1. Similarity graph: artists are linked by tag overlap (TF-IDF cosine over fine genres
  *    and country, so a shared "qawwali" or "India" counts more than a shared "pop")
- *    blended with genre-family overlap, plus a bonus for collaborating on a top track.
+ *    expanded with learned tag relatedness (PPMI), plus a bonus for collaborating on a top track.
  * 2. Louvain community detection on that graph finds the clusters.
  * 3. Splinter clusters (under ~2.5% of placed artists or < 6 artists) merge into their
  *    best-linked neighbour (or dissolve into orphans if isolated); isolated artists join
@@ -15,7 +15,7 @@
 import Graph from 'graphology';
 import louvain from 'graphology-communities-louvain';
 import { UMAP } from 'umap-js';
-import { familyVector, UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
+import { UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
 import { describeClusters } from './clusterNaming.js';
 
 const LOUVAIN_RESOLUTION = 1.3;
@@ -49,6 +49,17 @@ const MAX_CLUSTER_GAP_RATIO = 2.0;
 const MAX_ISOLATION = 1.25;
 // Share of a group's listening that must come from artists with real genre data.
 const MIN_GENRE_SHARE = 0.25;
+// Context check (doubtGenresAgainstContext): at least this many co-listened partners with
+// genres and this much link weight; the partners' mean similarity to each other is at
+// least CONTEXT_AGREEMENT; and the artist's best similarity to any of them is below
+// CONTEXT_MAX_OVERLAP.
+const CONTEXT_MIN_PARTNERS = 3;
+const CONTEXT_MIN_WEIGHT = 4;
+const CONTEXT_AGREEMENT = 0.3;
+const CONTEXT_MAX_OVERLAP = 0.08;
+// Learned tag relatedness: how many related tags each tag spreads to, and how strongly.
+const RELATED_TAGS = 8;
+const RELATED_WEIGHT = 0.25;
 const MAX_MEMBER_OUTLIER = 2.1;
 
 function pairHash(i, j) {
@@ -228,12 +239,56 @@ function embed3d(n, neighbors, labels) {
  * @param {Map<string, number>} collabs  key "idA|idB" (sorted) → number of shared top tracks
  * @param {Map<string, number>} together  same key → how often they're played/liked side by side
  */
-export function clusterArtists(artists, collabs, together = new Map()) {
-  const byId = new Map(artists.map(a => [a.id, a]));
-  // Dynamic cluster ceiling scaled to artist count:
-  // ~100 artists -> 8, ~500 -> 12, ~1,500 -> 16, ~3,300+ -> 20, hard cap at 22
-  const maxClusters = Math.max(8, Math.min(22, Math.round(8 + Math.sqrt(Math.max(0, artists.length - 100)) * 0.21)));
+/**
+ * Last.fm merges artists who share a name into one page, so a small artist can inherit
+ * a famous namesake's tags (Indian rapper King tagged "metal"). Catch that from the
+ * listening itself: if the artists you play with it (sessions, collaborations) sound
+ * alike and its tags resemble none of them, its tags describe someone else. Those
+ * genres are dropped, so it's placed by what you play it with instead.
+ * @returns {Set<string>} ids whose genres were dropped
+ */
+function doubtGenresAgainstContext(artists, byId, collabs, together, cosine) {
+  const partners = new Map(); // id → Map(partnerId → weight)
+  const link = (key, w) => {
+    const [x, y] = key.split('|');
+    if (!byId.has(x) || !byId.has(y)) return;
+    [[x, y], [y, x]].forEach(([p, q]) => {
+      if (!partners.has(p)) partners.set(p, new Map());
+      partners.get(p).set(q, (partners.get(p).get(q) || 0) + w);
+    });
+  };
+  together.forEach((w, k) => link(k, w));
+  collabs.forEach((w, k) => link(k, 2 * w));
 
+  const doubted = new Set();
+  artists.forEach(a => {
+    // Only tags that rest on Last.fm's shared artist page alone are open to doubt;
+    // confirmed tags stand even when you play the artist among very different music.
+    if (!a.genres?.length || !a.unverifiedTags || !a.vecIdx.length) return;
+    const ctx = [...(partners.get(a.id) || new Map())]
+      .map(([q, w]) => [byId.get(q), w])
+      .filter(([p]) => p.genres?.length && p.vecIdx.length);
+    const total = ctx.reduce((sum, [, w]) => sum + w, 0);
+    if (ctx.length < CONTEXT_MIN_PARTNERS || total < CONTEXT_MIN_WEIGHT) return;
+    // Do the partners agree with each other, and does this artist fit none of them?
+    let agree = 0, pairs = 0, fit = 0;
+    for (let i = 0; i < ctx.length; i++) {
+      fit = Math.max(fit, cosine(a, ctx[i][0]));
+      for (let j = i + 1; j < ctx.length; j++) { agree += cosine(ctx[i][0], ctx[j][0]); pairs++; }
+    }
+    if (pairs && agree / pairs >= CONTEXT_AGREEMENT && fit < CONTEXT_MAX_OVERLAP) doubted.add(a.id);
+  });
+  return doubted;
+}
+
+/**
+ * Artist vectors: TF-IDF over genre tags and "@country", then expanded with learned
+ * tag relatedness, so "indie rock" and "alternative rock" count as close without any
+ * hand-made genre families. Relatedness is positive pointwise mutual information
+ * (PPMI) of tags appearing on the same artists in this library, the classic
+ * distributional-semantics measure.
+ */
+function buildTagVectors(artists) {
   const n = artists.length;
   artists.forEach(a => {
     a.countries = a.countries || [];
@@ -245,44 +300,76 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     if (!tagId.has(t)) { tagId.set(t, tagId.size); df.push(0); }
     df[tagId.get(t)]++;
   }));
-  const familyIds = new Map();
+  // Co-occurrence of genre tags (countries excluded: they'd relate everything Indian).
+  const co = new Map();
+  artists.forEach(a => {
+    const ids = a.genres.map(t => tagId.get(t));
+    for (let i = 0; i < ids.length; i++) for (let j = 0; j < ids.length; j++) {
+      if (i === j) continue;
+      const k = ids[i] * 1e6 + ids[j];
+      co.set(k, (co.get(k) || 0) + 1);
+    }
+  });
+  const related = new Map(); // tag → [[tag, weight]] (row-normalised, top RELATED_TAGS)
+  co.forEach((c, k) => {
+    if (c < 2) return;
+    const i = Math.floor(k / 1e6), j = k % 1e6;
+    const pmi = Math.log((c * n) / (df[i] * df[j]));
+    if (pmi <= 0) return;
+    if (!related.has(i)) related.set(i, []);
+    related.get(i).push([j, pmi]);
+  });
+  related.forEach((list, i) => {
+    list.sort((x, y) => y[1] - x[1]);
+    const top = list.slice(0, RELATED_TAGS);
+    const sum = top.reduce((s, [, w]) => s + w, 0) || 1;
+    related.set(i, top.map(([j, w]) => [j, w / sum]));
+  });
   artists.forEach((a, i) => {
     a.index = i;
-    const entries = a.tags
-      .map(t => [tagId.get(t), Math.log(1 + n / df[tagId.get(t)]) * (t.startsWith('@') ? COUNTRY_TAG_WEIGHT : 1)])
-      .sort((x, y) => x[0] - y[0]);
+    const v = new Map();
+    a.tags.forEach(t => {
+      const id = tagId.get(t);
+      v.set(id, (v.get(id) || 0) + Math.log(1 + n / df[id]) * (t.startsWith('@') ? COUNTRY_TAG_WEIGHT : 1));
+    });
+    const base = [...v];
+    base.forEach(([id, w]) => (related.get(id) || []).forEach(([j, r]) => v.set(j, (v.get(j) || 0) + RELATED_WEIGHT * w * r)));
+    const entries = [...v].sort((x, y) => x[0] - y[0]);
     const norm = Math.hypot(...entries.map(e => e[1])) || 1;
     a.vecIdx = Int32Array.from(entries, e => e[0]);
     a.vecW = Float32Array.from(entries, e => e[1] / norm);
-    const fam = familyVector(a.genres, a.countries);
-    const famEntries = Object.entries(fam).map(([f, w]) => {
-      if (!familyIds.has(f)) familyIds.set(f, familyIds.size);
-      return [familyIds.get(f), w];
-    });
-    const famNorm = Math.hypot(...famEntries.map(e => e[1])) || 1;
-    a.families = fam;
-    a.fam = famEntries.map(([f, w]) => [f, w / famNorm]);
   });
+}
 
-  const sparseDot = (a, b) => {
-    let i = 0, j = 0, s = 0;
-    while (i < a.vecIdx.length && j < b.vecIdx.length) {
-      if (a.vecIdx[i] === b.vecIdx[j]) s += a.vecW[i++] * b.vecW[j++];
-      else if (a.vecIdx[i] < b.vecIdx[j]) i++;
-      else j++;
-    }
-    return s;
-  };
-  const famDot = (a, b) => {
-    let s = 0;
-    for (const [f, w] of a.fam) for (const [g, v] of b.fam) if (f === g) s += w * v;
-    return s;
-  };
+function sparseCosine(a, b) {
+  let i = 0, j = 0, s = 0;
+  while (i < a.vecIdx.length && j < b.vecIdx.length) {
+    if (a.vecIdx[i] === b.vecIdx[j]) s += a.vecW[i++] * b.vecW[j++];
+    else if (a.vecIdx[i] < b.vecIdx[j]) i++;
+    else j++;
+  }
+  return s;
+}
+
+export function clusterArtists(artists, collabs, together = new Map(), { nameable = null } = {}) {
+  const byId = new Map(artists.map(a => [a.id, a]));
+  // Dynamic cluster ceiling scaled to artist count:
+  // ~100 artists -> 8, ~500 -> 12, ~1,500 -> 16, ~3,300+ -> 20, hard cap at 22
+  const maxClusters = Math.max(8, Math.min(22, Math.round(8 + Math.sqrt(Math.max(0, artists.length - 100)) * 0.21)));
+
+  const n = artists.length;
+  buildTagVectors(artists);
+  const doubtedGenres = doubtGenresAgainstContext(artists, byId, collabs, together, sparseCosine);
+  if (doubtedGenres.size) {
+    doubtedGenres.forEach(id => { byId.get(id).genres = []; });
+    buildTagVectors(artists);
+  }
+  const sparseDot = sparseCosine;
   const pairKey = (x, y) => (x < y ? `${x}|${y}` : `${y}|${x}`);
 
   const musicalSim = (a, b) => {
     let w = 0;
-    if (a.vecIdx.length && b.vecIdx.length) w = 0.55 * sparseDot(a, b) + 0.45 * famDot(a, b);
+    if (a.vecIdx.length && b.vecIdx.length) w = sparseDot(a, b);
     const shared = collabs.get(pairKey(a.id, b.id)) || 0;
     if (shared) w += Math.min(1, 0.45 * shared);
     return w;
@@ -322,7 +409,7 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     if (n <= EXACT_LIMIT) {
       for (let j = 0; j < n; j++) add(j);
     }
-    const tagsByRarity = Array.from(a.vecIdx).sort((x, y) => df[x] - df[y]);
+    const tagsByRarity = Array.from(a.vecIdx).sort((x, y) => postings.get(x).length - postings.get(y).length);
     for (const t of tagsByRarity) {
       const list = postings.get(t);
       if (list.length <= MAX_CANDIDATE_DF) {
@@ -448,56 +535,30 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     });
   });
 
-  // 3. Cluster Genre Family Centroids:
-  // Compute normalized genre-family distribution for each formed cluster.
-  const clusterFamProfiles = new Map();
+  // 3. Orphans with tags join the cluster whose tag centroid they're closest to.
+  const centroids = new Map();
   finalLabel.forEach((c, i) => {
     if (c < 0) return;
-    if (!clusterFamProfiles.has(c)) clusterFamProfiles.set(c, new Map());
-    const prof = clusterFamProfiles.get(c);
-    const fams = artists[i].families || {};
-    Object.entries(fams).forEach(([f, weight]) => {
-      prof.set(f, (prof.get(f) || 0) + weight);
-    });
+    if (!centroids.has(c)) centroids.set(c, new Map());
+    const m = centroids.get(c);
+    const a = artists[i];
+    for (let k = 0; k < a.vecIdx.length; k++) m.set(a.vecIdx[k], (m.get(a.vecIdx[k]) || 0) + a.vecW[k]);
   });
-
-  const clusterFamVecs = new Map();
-  clusterFamProfiles.forEach((prof, c) => {
-    let normSq = 0;
-    prof.forEach(val => { normSq += val * val; });
-    const norm = Math.sqrt(normSq) || 1;
-    const normMap = new Map();
-    prof.forEach((val, f) => normMap.set(f, val / norm));
-    clusterFamVecs.set(c, normMap);
+  centroids.forEach(m => {
+    const norm = Math.hypot(...m.values()) || 1;
+    m.forEach((w, k) => m.set(k, w / norm));
   });
-
-  // Match orphan artists with genres or country tags to the best fitting cluster
   finalLabel.forEach((c, i) => {
     if (c >= 0) return;
     const a = artists[i];
-    const fams = a.families || {};
-    if (Object.keys(fams).length === 0) return;
-    let aNormSq = 0;
-    Object.values(fams).forEach(v => { aNormSq += v * v; });
-    const aNorm = Math.sqrt(aNormSq) || 1;
-
-    let bestCluster = -1;
-    let bestSim = 0.12;
-
-    clusterFamVecs.forEach((vec, clId) => {
+    if (!a.vecIdx.length) return;
+    let bestCluster = -1, bestSim = 0.12;
+    centroids.forEach((m, clId) => {
       let dot = 0;
-      Object.entries(fams).forEach(([f, v]) => {
-        if (vec.has(f)) dot += (v / aNorm) * vec.get(f);
-      });
-      if (dot > bestSim) {
-        bestSim = dot;
-        bestCluster = clId;
-      }
+      for (let k = 0; k < a.vecIdx.length; k++) dot += a.vecW[k] * (m.get(a.vecIdx[k]) || 0);
+      if (dot > bestSim) { bestSim = dot; bestCluster = clId; }
     });
-
-    if (bestCluster >= 0) {
-      finalLabel[i] = bestCluster;
-    }
+    if (bestCluster >= 0) finalLabel[i] = bestCluster;
   });
 
   // 4. Co-listening sessions: artists played alongside placed ones join their cluster (multi-hop propagation)
@@ -620,7 +681,7 @@ export function clusterArtists(artists, collabs, together = new Map()) {
 
   // Two groups that can only be told apart by an invented name are one genre group.
   let groupList = [...genreGroups.values()];
-  let described = describeClusters(groupList, uncharted, byId, n);
+  let described = describeClusters(groupList, uncharted, byId, n, nameable);
   for (let round = 0; round < 20 && described.some(c => c.duplicateOf); round++) {
     const byClusterId = new Map(described.map(c => [c.id, c]));
     const dup = described.find(c => c.duplicateOf);
@@ -628,7 +689,7 @@ export function clusterArtists(artists, collabs, together = new Map()) {
     if (!target) break;
     target.members.push(...dup.members);
     groupList = described.filter(c => c !== dup && c.family !== UNCLASSIFIED_FAMILY.id).map(c => c.members);
-    described = describeClusters(groupList, uncharted, byId, n);
+    described = describeClusters(groupList, uncharted, byId, n, nameable);
   }
 
   const clusterOf = new Map();
@@ -687,5 +748,5 @@ export function clusterArtists(artists, collabs, together = new Map()) {
   const positions = new Map();
   if (embedding) artists.forEach((a, i) => positions.set(a.id, embedding[i]));
 
-  return { clusters: described, assignment, affinityMatrix, positions };
+  return { clusters: described, assignment, affinityMatrix, positions, doubtedGenres };
 }

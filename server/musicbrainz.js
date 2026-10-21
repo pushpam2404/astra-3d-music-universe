@@ -110,3 +110,48 @@ export async function fetchMusicBrainzArtistMeta(spotifyIds) {
     clearTimeout(timer);
   }
 }
+
+const squashName = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]/g, '');
+const quoteLucene = (s) => `"${String(s).replace(/["\\]/g, ' ').trim()}"`;
+
+/**
+ * For artists without a Spotify id (history imports): find them on MusicBrainz through
+ * one of their own songs, which tells same-name artists apart. One recording search
+ * per artist (~1/s), then one artist search for country and tags of all matches.
+ * @param {Array<{id, name, track}>} artists  most important first
+ * @returns {Promise<{ metaById: Map<id, { mbid, country, area, tags }>, looked: number, error?: string }>} never throws
+ */
+export async function searchMusicBrainzByTrack(artists, budgetMs) {
+  const deadline = Date.now() + budgetMs;
+  const mbidFor = new Map(); // mbid → our id
+  let looked = 0;
+  try {
+    for (const a of artists) {
+      if (!a.track || Date.now() + 2500 > deadline) break;
+      if (looked > 0) await sleep(1100);
+      looked++;
+      const query = `recording:${quoteLucene(a.track)} AND artist:${quoteLucene(a.name)}`;
+      const res = await mbGet('/recording', new URLSearchParams({ query, fmt: 'json', limit: '5' }), AbortSignal.timeout(8000));
+      const want = squashName(a.name);
+      for (const rec of res.recordings || []) {
+        const credit = (rec['artist-credit'] || []).find(c => squashName(c.artist?.name || c.name) === want);
+        if (credit?.artist?.id) { mbidFor.set(credit.artist.id, a.id); break; }
+      }
+    }
+    if (!mbidFor.size || Date.now() + 1500 > deadline) return { metaById: new Map(), looked };
+    await sleep(1100);
+    const query = [...mbidFor.keys()].map(id => `arid:${id}`).join(' OR ');
+    const search = await mbGet('/artist', new URLSearchParams({ query, fmt: 'json', limit: '100' }), AbortSignal.timeout(8000));
+    const metaById = new Map();
+    (search.artists || []).forEach(m => {
+      const id = mbidFor.get(m.id);
+      if (!id) return;
+      let country = null;
+      try { country = m.country ? regionNames.of(m.country) : null; } catch { country = null; }
+      metaById.set(id, { mbid: m.id, country, area: m.area?.name || null, tags: usefulTags(m.tags, m.name, { max: 8 }) });
+    });
+    return { metaById, looked };
+  } catch (err) {
+    return { metaById: new Map(), looked, error: `MusicBrainz song search failed (${err.message})` };
+  }
+}

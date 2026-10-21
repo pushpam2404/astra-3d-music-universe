@@ -53,6 +53,27 @@ export function clearCachedSpotifySignals() {
   }
 }
 
+const VOCAB_KEY = 'astra_genre_vocab_v1';
+const VOCAB_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * The genre catalogue (Wikidata + MusicBrainz, served by /api/genre-vocabulary), kept
+ * in this browser for a week. Falls back to a stale copy, then to null (every tag is
+ * then treated as a genre).
+ */
+async function loadGenreVocabulary() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(VOCAB_KEY) || 'null'); } catch { stored = null; }
+  if (stored?.aliases && Date.now() - stored.fetchedAt < VOCAB_TTL_MS) return stored;
+  try {
+    const fresh = await requestJson('/api/genre-vocabulary');
+    try { localStorage.setItem(VOCAB_KEY, JSON.stringify(fresh)); } catch { /* storage full: use it this once */ }
+    return fresh;
+  } catch {
+    return stored?.aliases ? stored : null;
+  }
+}
+
 async function requestJson(url, options) {
   const res = await fetch(url, { credentials: 'same-origin', ...options });
   const body = await res.json().catch(() => ({}));
@@ -162,6 +183,7 @@ async function buildBrowserHistoryUniverse(
   });
 
   const newlyEnrichedMeta = {};
+  const vocabularyPromise = loadGenreVocabulary();
   if (!skipInitialEnrich && state.unknown.length > 0) {
     const batches = [];
     for (let i = 0; i < INITIAL_CLIENT_ENRICH_CONCURRENCY; i++) {
@@ -188,6 +210,7 @@ async function buildBrowserHistoryUniverse(
 
   const assembled = assembleUniverseFromSignals(state, {
     knownMeta: mergedKnown,
+    vocabulary: await vocabularyPromise,
     diagnostics
   });
 

@@ -54,18 +54,19 @@ export function updateEnrichmentStatus({ waitingCount = 0, readyOnReloadCount = 
   }
 
   statusEl.hidden = false;
+  // Plain progress: the map refines itself while you're idle, so the button is only
+  // for applying the newest genres right away.
   if (waitingCount > 0) {
     statusEl.innerHTML = `
       <span class="status-pulse-dot" aria-hidden="true"></span>
-      <span><strong>${waitingCount.toLocaleString()}</strong> artists waiting for info · 
-      <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists ready on reload</span>
-      ${readyOnReloadCount > 0 ? '<button type="button" class="pill-action" data-enrich-reload>Apply now</button>' : ''}
+      <span>Finding genres for <strong>${waitingCount.toLocaleString()}</strong> more artists. The map refines as they arrive.</span>
+      ${readyOnReloadCount > 0 ? '<button type="button" class="pill-action" data-enrich-reload>Update now</button>' : ''}
     `;
   } else {
     statusEl.innerHTML = `
       <span class="status-pulse-dot is-ready" aria-hidden="true"></span>
-      <span>All artists checked · <strong>+${readyOnReloadCount.toLocaleString()}</strong> new artists ready</span>
-      <button type="button" class="pill-action" data-enrich-reload>Reload to apply</button>
+      <span>Genres found for <strong>${readyOnReloadCount.toLocaleString()}</strong> more artists.</span>
+      <button type="button" class="pill-action" data-enrich-reload>Update map</button>
     `;
   }
 
@@ -74,7 +75,7 @@ export function updateEnrichmentStatus({ waitingCount = 0, readyOnReloadCount = 
     btn.onclick = (e) => {
       e?.preventDefault();
       btn.disabled = true;
-      btn.textContent = 'Applying...';
+      btn.textContent = 'Updating…';
       if (typeof onApply === 'function') {
         onApply();
       } else {

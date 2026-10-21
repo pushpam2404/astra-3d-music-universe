@@ -14,6 +14,7 @@ import {
   RANGE_WEIGHTS
 } from '../src/etl/universeAssembler.js';
 import { enrichArtists, isFreshMeta, toCacheEntry } from './enrich.js';
+import { getGenreVocabulary } from './genreVocabulary.js';
 
 const PAGE_SIZE = 50;
 const MAX_TOP_ITEMS_PER_RANGE = 200;
@@ -148,7 +149,7 @@ export async function buildUniverseDataset(
 
   const metaStart = Date.now();
   const firstBatch = state.unknown.slice(0, INITIAL_ENRICH_LIMIT);
-  const enriched = await enrichArtists(firstBatch, METADATA_BUDGET_MS);
+  const [enriched, vocabulary] = await Promise.all([enrichArtists(firstBatch, METADATA_BUDGET_MS), getGenreVocabulary()]);
   diagnostics.warnings.push(...enriched.warnings);
   diagnostics.lastfm = enriched.stats;
   diagnostics.metadataMs = Date.now() - metaStart;
@@ -158,6 +159,7 @@ export async function buildUniverseDataset(
     enriched,
     isFreshMetaFn: isFreshMeta,
     toCacheEntryFn: toCacheEntry,
+    vocabulary,
     diagnostics
   });
 }

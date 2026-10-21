@@ -5,9 +5,8 @@
  * Spotify Extended Streaming History files can be merged and clustered directly
  * on the client without hitting serverless payload limits (HTTP 413 on Vercel).
  */
-import { normalizeGenre } from '../config/genreTaxonomy.js';
-import { isJunkTag } from '../../server/tagFilter.js';
-import { PLACE_TAGS } from '../../server/places.js';
+import { selectGenreTags } from './genreSignals.js';
+import { titleCase as genreTitleCase } from '../../server/clusterNaming.js';
 import {
   cleanTrackTitle,
   normalizeArtistKey,
@@ -381,7 +380,9 @@ export function assembleUniverseFromSignals(
     knownMeta = {},
     enriched = { meta: new Map(), done: new Set(), warnings: [], stats: null },
     isFreshMetaFn = isFreshClientMeta,
-    toCacheEntryFn = ({ g, c }) => ({ g, c, t: Date.now() }),
+    toCacheEntryFn = ({ g, c, u }) => ({ g, c, t: Date.now(), ...(u ? { u } : {}) }),
+    // Genre catalogue from /api/genre-vocabulary (Wikidata + MusicBrainz); null = unreachable.
+    vocabulary = null,
     diagnostics = { warnings: [] }
   } = {}
 ) {
@@ -416,6 +417,7 @@ export function assembleUniverseFromSignals(
   const genreSource = { spotify: 0, remembered: 0, enriched: 0, none: 0 };
   const artistGenres = new Map();
   const artistFeatures = new Map();
+  const rawTags = new Map();
   const artistMeta = {};
 
   includedArtists.forEach(a => {
@@ -424,7 +426,7 @@ export function assembleUniverseFromSignals(
     const known = knownMeta[a.id];
     if ((a.genres || []).length) {
       genreSource.spotify++;
-      genres = [...new Set(a.genres.map(normalizeGenre))];
+      genres = [...a.genres];
       countries = isFreshMetaFn(known) ? cleanMetaList(known.c, 4) : [];
     } else if (isFreshMetaFn(known)) {
       genreSource.remembered++;
@@ -438,10 +440,21 @@ export function assembleUniverseFromSignals(
       else genreSource.none++;
       if (enriched.done.has(a.id)) artistMeta[a.id] = toCacheEntryFn(found);
     }
-    // Cached tags predate filter fixes: normalize and drop non-genres here too.
-    genres = [...new Set(genres.map(normalizeGenre))].filter(g => !isJunkTag(g) && !PLACE_TAGS.has(g));
+    rawTags.set(a.id, genres);
+    const unverifiedTags = Boolean((known && isFreshMetaFn(known) && !(a.genres || []).length ? known : enriched.meta.get(a.id))?.u);
+    artistFeatures.set(a.id, { countries, unverifiedTags });
+  });
+
+  // Which tags are genres: catalogue, languages, places, and a coherence test for the
+  // rest (src/etl/genreSignals.js). Re-run on every load, so cached tags benefit too.
+  const { genresById, countriesById, nameable } = selectGenreTags(rawTags, vocabulary);
+  if (!vocabulary) diagnostics.warnings.push('Genre catalogue unavailable; every tag was treated as a genre.');
+  includedArtists.forEach(a => {
+    const f = artistFeatures.get(a.id);
+    const genres = (genresById.get(a.id) || []).slice(0, MAX_GENRES_PER_ARTIST);
+    f.genres = genres;
+    f.countries = [...new Set([...f.countries, ...(countriesById.get(a.id) || [])])];
     artistGenres.set(a.id, genres);
-    artistFeatures.set(a.id, { genres, countries });
   });
 
   diagnostics.genreSource = genreSource;
@@ -462,14 +475,16 @@ export function assembleUniverseFromSignals(
 
   const together = listenedTogether(saved, recent, includedIdSet, historySummary?.togetherPairs || [], artistIdByNorm);
   diagnostics.listenedTogetherPairs = together.size;
-  const { clusters, assignment, affinityMatrix, positions } = clusterArtists(
+  const { clusters, assignment, affinityMatrix, positions, doubtedGenres } = clusterArtists(
     includedArtists.map(a => ({ id: a.id, name: a.name, ...artistFeatures.get(a.id), score: artistScore.get(a.id) || 1 })),
     collabs,
-    together
+    together,
+    { nameable }
   );
   diagnostics.clusters = clusters.map(c => `${c.name} (${c.members.length})`);
+  diagnostics.doubtedGenres = doubtedGenres.size;
 
-  const titleCase = (g) => g.replace(/\b([a-z])/g, (m) => m.toUpperCase());
+  const titleCase = genreTitleCase;
   const artists = includedArtists.map(a => {
     const { clusterId, bridge } = assignment.get(a.id);
     const hist = artistHistoryById.get(a.id) || null;
@@ -480,7 +495,9 @@ export function assembleUniverseFromSignals(
       name: a.name,
       genres: bridge ? [clusterId, bridge.clusterId] : [clusterId],
       bridgeWeight: bridge ? bridge.weight : 0,
-      subgenres: artistGenres.get(a.id).slice(0, 6).map(titleCase),
+      subgenres: doubtedGenres.has(a.id) ? [] : artistGenres.get(a.id).slice(0, 6).map(titleCase),
+      // Tags Last.fm gave this name that don't fit what you play it with (likely a namesake).
+      doubtedTags: doubtedGenres.has(a.id) ? artistGenres.get(a.id).slice(0, 3).map(titleCase) : undefined,
       basePlays: Math.max(10, Math.round(artistScore.get(a.id) || 10)),
       ...estimatedFeatures(a.id),
       ranks: artistRanks.get(a.id) || {},

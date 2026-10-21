@@ -1,5 +1,6 @@
 // src/main.js
 import * as THREE from 'three';
+import { animate } from 'motion';
 import { GALAXY_PRESETS } from './config/presets.js';
 import { buildUniverseGraph } from './etl/graphNormalizer.js';
 import { getAuthStatus, fetchUniverse, enrichArtists } from './api/backendClient.js';
@@ -40,6 +41,11 @@ const AppState = {
 };
 
 const ENRICH_BATCH = 40;
+// Auto-refine once this many artists (or this share of the pending ones) have new
+// genres, after this long without interaction.
+const AUTO_REFINE_MIN = 60;
+const AUTO_REFINE_SHARE = 0.15;
+const AUTO_REFINE_IDLE_MS = 8000;
 const plural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString()} ${n === 1 ? one : many}`;
 
 async function initApp() {
@@ -386,7 +392,14 @@ async function initApp() {
     }
   }
 
-  function loadDataset(rawDataset) {
+  /**
+   * @param {object} rawDataset
+   * @param {{ morph?: boolean }} opts  morph: keep the camera and let suns and planets
+   *   glide from their old positions (used when the map refines in the background).
+   */
+  function loadDataset(rawDataset, { morph = false } = {}) {
+    const previous = new Map();
+    if (morph) AppState.nodes.forEach(n => { if (n.type !== 'track' && n.position) previous.set(n.id, n.position.clone()); });
     AppState.rawDataset = rawDataset;
     AppState.nodes.forEach(n => { if (n.meshGroup?.isObject3D) scene.remove(n.meshGroup); });
     if (edgeGroup) scene.remove(edgeGroup);
@@ -402,6 +415,7 @@ async function initApp() {
 
     layout.initializeNodePositions(AppState.nodes);
     cameraController.setSceneRadius(layout.boundingRadius);
+    if (morph) startMorph(previous);
 
     AppState.nodes.forEach(node => { if (node.type === 'genre') factory.buildGenreSun(node); });
     factory.buildArtistPlanets(AppState.nodes.filter(n => n.type === 'artist'));
@@ -417,7 +431,7 @@ async function initApp() {
     hud.updateHistoryButtonBadge();
     applyLayerVisibility();
     hud.restoreSettings();
-    cameraController.resetOverview();
+    if (!morph) cameraController.resetOverview();
   }
 
   function applyLayerVisibility() {
@@ -456,9 +470,10 @@ async function initApp() {
     historySummary = AppState.historySummary,
     useLocalHistory = true,
     skipInitialEnrich = false,
-    spotifyApiOnly = AppState.spotifyApiOnly
+    spotifyApiOnly = AppState.spotifyApiOnly,
+    refine = false
   } = {}) {
-    hud.setLoading(true);
+    if (!refine) hud.setLoading(true);
     try {
       const { dataset, artistMeta, diagnostics } = await fetchUniverse(loadArtistMeta(), {
         historySummary: spotifyApiOnly ? null : historySummary,
@@ -474,8 +489,9 @@ async function initApp() {
         hud.setNotice('Spotify has no listening data for this account yet.');
         return;
       }
+      const morph = refine && !AppState.isDemo;
       AppState.isDemo = false;
-      loadDataset(dataset);
+      loadDataset(dataset, { morph });
       updateUniverseCaption(dataset);
 
       if (authStatus.loggedIn && authStatus.missingScopes?.includes('user-library-read')) {
@@ -509,6 +525,43 @@ async function initApp() {
     }
   }
 
+  // One spring drives every glide (Motion: a single interruptible animation, no
+  // per-node tweens). Cluster ids change between maps, so a new sun starts from
+  // where its artists were.
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let morphAnimation = null;
+  function startMorph(previous) {
+    const v = new THREE.Vector3();
+    AppState.nodes.forEach(n => {
+      if (n.type === 'artist') n.morphFrom = previous.get(n.id) || null;
+    });
+    AppState.nodes.forEach(n => {
+      if (n.type !== 'genre') return;
+      if (previous.has(n.id)) { n.morphFrom = previous.get(n.id); return; }
+      let count = 0;
+      v.set(0, 0, 0);
+      AppState.nodes.forEach(a => {
+        if (a.type === 'artist' && a.genres?.[0] === n.id && a.morphFrom) { v.add(a.morphFrom); count++; }
+      });
+      n.morphFrom = count ? v.clone().divideScalar(count) : null;
+    });
+    morphAnimation?.stop();
+    if (reduceMotion.matches) { layout.morphT = 1; return; }
+    layout.morphT = 0;
+    morphAnimation = animate(0, 1, {
+      type: 'spring', visualDuration: 1.4, bounce: 0,
+      onUpdate: (t) => { layout.morphT = t; }
+    });
+  }
+
+  // The map refines itself as genres arrive, but only while you aren't exploring:
+  // never mid-gesture, never with something selected.
+  let lastInteraction = performance.now();
+  ['pointerdown', 'wheel', 'keydown', 'touchstart'].forEach(type =>
+    window.addEventListener(type, () => { lastInteraction = performance.now(); }, { passive: true }));
+  const isIdle = () => !AppState.selectedNode && document.visibilityState === 'visible' &&
+    performance.now() - lastInteraction > AUTO_REFINE_IDLE_MS;
+
   let enrichRun = 0;
   async function enrichInBackground(unenrichedArtists) {
     const run = ++enrichRun;
@@ -518,8 +571,9 @@ async function initApp() {
     const applyResolvedNow = async () => {
       enrichRun++;
       hud.updateEnrichmentStatus({ waitingCount: 0, readyOnReloadCount: 0 });
-      await loadLive({ skipInitialEnrich: true });
+      await loadLive({ skipInitialEnrich: true, refine: true });
     };
+    const refineThreshold = Math.max(AUTO_REFINE_MIN, Math.round(unenrichedArtists.length * AUTO_REFINE_SHARE));
 
     hud.updateEnrichmentStatus({
       waitingCount: waitingToFetchCount,
@@ -548,6 +602,12 @@ async function initApp() {
         saveArtistMeta(toSave);
 
         waitingToFetchCount = Math.max(0, unenrichedArtists.length - (i + batch.length));
+        const finished = waitingToFetchCount === 0;
+        if (newlyResolvedForReloadCount > 0 && (finished || newlyResolvedForReloadCount >= refineThreshold) && isIdle()) {
+          // The refined map starts its own lookup loop for whatever is still pending.
+          applyResolvedNow();
+          return;
+        }
         hud.updateEnrichmentStatus({
           waitingCount: waitingToFetchCount,
           readyOnReloadCount: newlyResolvedForReloadCount,

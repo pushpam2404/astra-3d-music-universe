@@ -1,39 +1,36 @@
 // server/clusterNaming.js
 /**
- * Names clusters from what makes them *distinctive*, not from what is most common:
- * a genre's weight is its support inside the cluster times its lift over the whole
- * library, so "pop" (everywhere) loses to "neo psychedelia" (concentrated here).
+ * Names each cluster after the genres that distinguish it, using class-based TF-IDF
+ * (c-TF-IDF) as in BERTopic: a cluster is treated as one document made of its members'
+ * genre tags, and a tag scores
  *
- *   two distinctive genres      → "Psychedelic & Indie Rock", "Filmi & Sufi"
- *   one genre + distinctive home → "Pakistani Pop", "Indian Folk Pop"
+ *     W(t, c) = tf(t, c) · log(1 + A / f(t))
  *
- * Every name comes from genre tags the members really have (Wikidata, MusicBrainz,
- * Last.fm) or from their genre families. Never moods, invented themes or artist names.
- * When no unused genre name is left, the cluster is reported as `duplicateOf` the
- * cluster holding its best name, and clustering merges the two (same genre = same group).
+ * where tf is the tag's share of the cluster's tags, f(t) the tag's frequency across all
+ * clusters, and A the average number of tags per cluster. Common-everywhere tags ("pop")
+ * lose to concentrated ones ("filmi").
+ *
+ * Only nameable tags can name a cluster (curated catalogue genres and language names, see
+ * src/etl/genreSignals.js), and only with consensus: the tag must be on at least
+ * MIN_SUPPORT of the cluster's genre-known artists. No moods, invented themes or artist
+ * names. When no unused name is left, the cluster is reported as `duplicateOf` the
+ * cluster holding its best name, and clustering merges the two.
  */
-import {
-  familyInfo,
-  OTHER_FAMILY,
-  UNCLASSIFIED_FAMILY,
-  CLUSTER_COLORS,
-  getDistinctClusterColor
-} from '../src/config/genreTaxonomy.js';
-import { DEMONYMS, PLACE_TAGS } from './places.js';
+import { UNCLASSIFIED_FAMILY, getDistinctClusterColor, CLUSTER_COLORS } from '../src/config/genreTaxonomy.js';
 
 export { CLUSTER_COLORS };
-
-// Genres so broad that they only name a cluster when nothing more specific exists.
-const BROAD_GENRES = new Set(['pop', 'rock', 'world', 'music', 'singer songwriter', 'soundtrack', 'electronic', 'dance', 'instrumental', 'vocal']);
-// Words that already say where the music is from; no demonym needed next to them.
-const PLACE_WORDS = /\b(indian|punjabi|pakistani|hindi|urdu|filmi|bollywood|desi|bhangra|qawwali|k pop|j pop|korean|japanese|latin|brazilian|uk|british|french|german|african|arab|turkish|tamil|telugu)\b/;
 
 // Longer names crowd the 3D labels; shorter candidates win when available.
 const MAX_NAME_LENGTH = 28;
 const UNCHARTED_COLOR = '#6E768C';
+// A naming tag must carry at least this share of the cluster's (genre-known) listening.
+const MIN_SUPPORT = 0.15;
+// The second genre joins the name when its score is at least this share of the first's.
+const SECOND_GENRE_RATIO = 0.55;
 
-const CASE_FIXES = [[/\bR&b\b/g, 'R&B'], [/\bEdm\b/g, 'EDM'], [/\bUk\b/g, 'UK'], [/\bUs\b/g, 'US'], [/\bLo Fi\b/g, 'Lo-Fi'], [/\bK Pop\b/g, 'K-Pop'], [/\bJ Pop\b/g, 'J-Pop'], [/\bDnb\b/g, 'DnB'], [/\bIdm\b/g, 'IDM']];
-export const titleCase = (s) => CASE_FIXES.reduce((t, [re, rep]) => t.replace(re, rep), s.replace(/\b([a-z])/g, (m) => m.toUpperCase()));
+// Letter-case conventions only (how genre names are written), not genre knowledge.
+const CASE_FIXES = [[/\bR&b\b/g, 'R&B'], [/\bEdm\b/g, 'EDM'], [/\bUk\b/g, 'UK'], [/\bUs\b/g, 'US'], [/\bLo-fi\b/gi, 'Lo-Fi'], [/\bK-pop\b/gi, 'K-Pop'], [/\bJ-pop\b/gi, 'J-Pop'], [/\bJ-rock\b/gi, 'J-Rock'], [/\bDnb\b/g, 'DnB'], [/\bIdm\b/g, 'IDM']];
+export const titleCase = (s) => CASE_FIXES.reduce((t, [re, rep]) => t.replace(re, rep), String(s).replace(/(^|[\s(/-])([a-z])/g, (m, p, c) => p + c.toUpperCase()));
 
 /** "Psychedelic Rock" + "Indie Rock" → "Psychedelic & Indie Rock"; otherwise "A & B". */
 function joinGenres(a, b) {
@@ -49,171 +46,76 @@ const overlaps = (a, b) => a.includes(b) || b.includes(a);
 /**
  * @param {string[][]} clusters  member id lists
  * @param {string[]} uncharted   ids with no usable signal
- * @param {Map} byId             id → { name, genres, countries, fam, score }
+ * @param {Map} byId             id → { name, genres, countries, score }
  * @param {number} n             total artist count
+ * @param {Set<string> | null} nameable  tags allowed in names (null: any genre tag)
  */
-export function describeClusters(clusters, uncharted, byId, n) {
+export function describeClusters(clusters, uncharted, byId, n, nameable = null) {
   const scoreOf = (id) => byId.get(id).score || 1;
+  const canName = (g) => !nameable || nameable.has(g);
 
-  // Library-wide frequencies for lift (measured over artists that actually have genres/countries).
-  const genreDf = new Map();
-  const countryDf = new Map();
-  let genreKnownN = 0;
-  let countryKnownN = 0;
-  byId.forEach(a => {
-    if (a.genres?.length) {
-      genreKnownN++;
-      new Set(a.genres).forEach(g => genreDf.set(g, (genreDf.get(g) || 0) + 1));
-    }
-    if (a.countries?.length) {
-      countryKnownN++;
-      new Set(a.countries).forEach(c => countryDf.set(c, (countryDf.get(c) || 0) + 1));
-    }
+  const sorted = clusters
+    .slice()
+    .sort((A, B) => B.reduce((s, id) => s + scoreOf(id), 0) - A.reduce((s, id) => s + scoreOf(id), 0));
+
+  // Term frequencies per cluster, weighted by listening (√score, so one favourite
+  // can't outweigh a whole scene), and corpus-wide tag frequencies.
+  const weightOf = (id) => Math.sqrt(scoreOf(id));
+  const counts = sorted.map(members => {
+    const m = new Map();
+    members.forEach(id => new Set(byId.get(id).genres || []).forEach(g => m.set(g, (m.get(g) || 0) + weightOf(id))));
+    return m;
   });
-  genreKnownN = Math.max(1, genreKnownN || n);
-  countryKnownN = Math.max(1, countryKnownN || n);
+  const freq = new Map();
+  counts.forEach(m => m.forEach((c, g) => freq.set(g, (freq.get(g) || 0) + c)));
+  const totals = counts.map(m => [...m.values()].reduce((s, c) => s + c, 0));
+  const avgTags = totals.reduce((s, t) => s + t, 0) / Math.max(1, totals.length);
 
   const usedNames = new Map(); // lower-case name → cluster id
   const described = [];
 
-  const sortedClusters = clusters
-    .slice()
-    .sort((A, B) => B.reduce((s, id) => s + scoreOf(id), 0) - A.reduce((s, id) => s + scoreOf(id), 0));
-
-  sortedClusters.forEach((members, clusterIdx) => {
-    const genreRichSize = Math.max(1, members.filter(id => byId.get(id).genres?.length).length);
-    const countryRichSize = Math.max(1, members.filter(id => byId.get(id).countries?.length).length);
-    const famScore = {};
-    const genreCount = new Map();
-    const countryCount = new Map();
-    members.forEach(id => {
-      const a = byId.get(id);
-      Object.entries(a.families).forEach(([f, w]) => { famScore[f] = (famScore[f] || 0) + w * scoreOf(id); });
-      new Set(a.genres).forEach(g => genreCount.set(g, (genreCount.get(g) || 0) + 1));
-      new Set(a.countries).forEach(c => countryCount.set(c, (countryCount.get(c) || 0) + 1));
-    });
-
-    // 2. Identify top genre families
-    const sortedFams = Object.entries(famScore).sort((x, y) => y[1] - x[1]);
-    const primaryFamId = sortedFams[0]?.[0];
-    const secondaryFamId = sortedFams[1]?.[0];
-    const primaryFam = primaryFamId ? familyInfo(primaryFamId) : OTHER_FAMILY;
-    const secondaryFam = secondaryFamId ? familyInfo(secondaryFamId) : null;
-
-    // Distinctive genres: consensus support × log-lift over genre-known members in the cluster.
-    // In small clusters (<= 5 artists), 1 artist is acceptable if no consensus exists;
-    // in medium/large clusters (> 5 artists), require at least 2 artists and >= 10% support
-    // so an outlier tag (like 1 Bhojpuri play in a 200-artist Hindi cluster) never hijacks the name.
-    const minSupport = genreRichSize <= 5 ? 1 : Math.max(2, Math.ceil(genreRichSize * 0.10));
-    const ranked = [...genreCount.entries()]
-      .filter(([g, c]) => c >= minSupport && !PLACE_TAGS.has(g))
-      .map(([g, c]) => {
-        const support = c / genreRichSize;
-        const lift = support / ((genreDf.get(g) || 1) / genreKnownN);
-        const clampedLift = Math.min(14, lift);
-        return { g, c, support, score: Math.pow(support, 1.35) * Math.log(1 + clampedLift) * (BROAD_GENRES.has(g) ? 0.55 : 1) };
-      })
+  sorted.forEach((members, idx) => {
+    const known = members.filter(id => byId.get(id).genres?.length);
+    const knownWeight = known.reduce((s, id) => s + weightOf(id), 0) || 1;
+    const artistCount = new Map();
+    known.forEach(id => new Set(byId.get(id).genres).forEach(g => artistCount.set(g, (artistCount.get(g) || 0) + 1)));
+    // Consensus: on at least 2 artists and MIN_SUPPORT of the cluster's listening.
+    const ranked = [...counts[idx]]
+      .filter(([g, w]) => (artistCount.get(g) || 0) >= Math.min(2, members.length) && w / knownWeight >= MIN_SUPPORT && canName(g))
+      .map(([g, w]) => ({ g, score: (w / (totals[idx] || 1)) * Math.log(1 + avgTags / freq.get(g)) }))
       .sort((x, y) => y.score - x.score || x.g.localeCompare(y.g));
 
-    // A home country names the cluster only where it is concentrated.
-    const [topCountry, topCountryCount] = [...countryCount.entries()].sort((x, y) => y[1] - x[1])[0] || [];
-    const share = topCountry ? topCountryCount / countryRichSize : 0;
-    const globalShare = topCountry ? (countryDf.get(topCountry) || 1) / countryKnownN : 1;
-    const demonym = topCountry && share >= 0.50 && share >= 1.25 * globalShare ? (DEMONYMS[topCountry] || null) : null;
-
-    const topArtists = members.slice().sort((x, y) => scoreOf(y) - scoreOf(x)).slice(0, 3).map(id => byId.get(id).name);
-
-    // Dynamic candidates — strictly authentic musical genres, regions, or sonic descriptors.
-    // NEVER artist names ("Artist & Co.")!
     const candidates = [];
-
-    // Level A: Fine-grained distinctive genres and dual-genre pairs
-    // Only use fine-grained tags for primary title if the top tag has meaningful support:
-    // at least 3 artists (for clusters with >= 10 members) and >= 15% support among genre-known artists.
-    const isGenreRepresentative = ranked.length > 0 && (
-      (members.length < 10 && ranked[0].support >= 0.25) ||
-      (ranked[0].c >= 3 && ranked[0].support >= 0.15)
-    );
-    if (isGenreRepresentative) {
-      for (let i = 0; i < Math.min(5, ranked.length); i++) {
-        const g1 = titleCase(ranked[i].g);
-        const withHome = demonym && !PLACE_WORDS.test(ranked[i].g) ? `${demonym} ${g1}` : null;
-        for (let j = i + 1; j < Math.min(5, ranked.length); j++) {
-          if (!overlaps(ranked[i].g, ranked[j].g)) {
-            const g2 = titleCase(ranked[j].g);
-            const joined = joinGenres(g1, g2);
-            if (withHome && withHome.length <= 18) {
-              const joinedHome = joinGenres(withHome, g2);
-              if (joinedHome.length <= MAX_NAME_LENGTH) candidates.push(joinedHome);
-            }
-            if (joined.length <= MAX_NAME_LENGTH) candidates.push(joined);
-          }
-        }
-        if (withHome && withHome.length <= MAX_NAME_LENGTH) candidates.push(withHome);
-        if (g1.length <= MAX_NAME_LENGTH) candidates.push(g1);
-      }
+    const top = ranked.slice(0, 6);
+    for (let i = 0; i < top.length; i++) {
+      const g1 = titleCase(top[i].g);
+      const partner = top.slice(i + 1).find(r => !overlaps(r.g, top[i].g) && r.score >= top[i].score * SECOND_GENRE_RATIO);
+      if (partner) candidates.push(joinGenres(g1, titleCase(partner.g)));
+      candidates.push(g1);
     }
-
-    // Level B: Family crossovers (e.g. "Desi Hip-Hop", "Electropop", "Indie Pop & Rock")
-    const famPairs = [];
-    if (primaryFamId === 'southasian' && secondaryFamId === 'hiphop') famPairs.push('Desi Hip-Hop', 'South Asian Rap');
-    else if (primaryFamId === 'hiphop' && secondaryFamId === 'southasian') famPairs.push('Desi Hip-Hop', 'Desi Rap');
-    else if (primaryFamId === 'southasian' && secondaryFamId === 'pop') famPairs.push('Filmi & Pop', 'Desi Pop', 'Indian Pop');
-    else if (primaryFamId === 'pop' && secondaryFamId === 'southasian') famPairs.push('Indian Pop', 'Desi Pop');
-    else if (primaryFamId === 'electronic' && secondaryFamId === 'pop') famPairs.push('Electropop', 'Dance Pop');
-    else if (primaryFamId === 'pop' && secondaryFamId === 'electronic') famPairs.push('Electropop', 'Dance Pop');
-    else if (primaryFamId === 'rock' && secondaryFamId === 'pop') famPairs.push('Indie Pop & Rock', 'Pop Rock');
-    else if (primaryFamId === 'rnb' && secondaryFamId === 'hiphop') famPairs.push('R&B & Hip-Hop', 'Melodic Rap');
-    else if (primaryFamId === 'electronic' && secondaryFamId === 'hiphop') famPairs.push('Trap & Bass', 'Electronic Beats');
-    else if (primaryFamId === 'folk' && secondaryFamId === 'rock') famPairs.push('Folk Rock', 'Acoustic Indie');
-    else if (primaryFamId === 'rock' && secondaryFamId === 'metal') famPairs.push('Alternative Metal', 'Heavy Rock');
-    candidates.push(...famPairs);
-
-    // Level C: Demonym + genre family, when the family doesn't already say the place.
-    const familySaysPlace = ['southasian', 'asianpop', 'latin'].includes(primaryFamId);
-    if (demonym && primaryFamId && primaryFamId !== OTHER_FAMILY.id && !familySaysPlace) {
-      const homeFam = `${demonym} ${primaryFam.label}`;
-      if (homeFam.length <= MAX_NAME_LENGTH) candidates.push(homeFam);
-    }
-
-    // Level E: Primary and Secondary Family combinations
-    if (primaryFamId && primaryFamId !== OTHER_FAMILY.id) {
-      candidates.push(primaryFam.label);
-      if (secondaryFam && secondaryFamId !== OTHER_FAMILY.id) {
-        const joined = `${primaryFam.label} & ${secondaryFam.label}`;
-        if (joined.length <= MAX_NAME_LENGTH) candidates.push(joined);
-      }
-    }
-
-    // Last real-genre options: any two of the cluster's supported genres.
     for (let i = 0; i < ranked.length; i++) {
       for (let j = i + 1; j < ranked.length; j++) {
         if (!overlaps(ranked[i].g, ranked[j].g)) candidates.push(joinGenres(titleCase(ranked[i].g), titleCase(ranked[j].g)));
       }
     }
 
+    const id = `cluster_${described.length}_genre`;
     const free = candidates.find(c => c.length <= MAX_NAME_LENGTH && !usedNames.has(c.toLowerCase()))
       || candidates.find(c => !usedNames.has(c.toLowerCase()));
     // No genre name of its own: by genre it is the same group as the one holding its best name.
     const duplicateOf = free ? null : (usedNames.get(candidates[0]?.toLowerCase()) ?? described[0]?.id ?? null);
     const name = free || candidates[0] || null;
-    const clusterId = `cluster_${described.length}_${(primaryFamId ? familyInfo(primaryFamId) : OTHER_FAMILY).id}`;
-    if (free) usedNames.set(free.toLowerCase(), clusterId);
-
-    // Family stays as a metadata/text label; each cluster gets a unique maximally-distant color in size order
-    const familyId = Object.entries(famScore).sort((x, y) => y[1] - x[1])[0]?.[0];
-    const family = familyId ? familyInfo(familyId) : OTHER_FAMILY;
-    const color = getDistinctClusterColor(clusterIdx);
+    if (free) usedNames.set(free.toLowerCase(), id);
 
     described.push({
-      id: clusterId,
+      id,
       name,
       duplicateOf,
-      family: family.id,
-      familyLabel: family.label,
-      color,
+      family: 'genre',
+      familyLabel: ranked.slice(0, 2).map(r => titleCase(r.g)).join(' · '),
+      color: getDistinctClusterColor(idx),
       subgenres: ranked.slice(0, 6).map(r => titleCase(r.g)),
-      topArtists,
+      topArtists: members.slice().sort((x, y) => scoreOf(y) - scoreOf(x)).slice(0, 3).map(m => byId.get(m).name),
       members
     });
   });

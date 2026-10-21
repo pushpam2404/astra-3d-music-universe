@@ -63,7 +63,7 @@ async function lastfmTags(method, params, artistName) {
     }
     if (json.error) return [];
     const tags = (json.toptags?.tag || []).map(t => ({ name: t.name, count: Number(t.count) }));
-    return usefulTags(tags, artistName, { max: 6, minCount: MIN_TAG_WEIGHT });
+    return usefulTags(tags, artistName, { max: 10, minCount: MIN_TAG_WEIGHT });
   } finally {
     clearTimeout(timer);
   }
@@ -140,4 +140,21 @@ export async function fetchLastfmTags(artists, budgetMs) {
   const skipped = queue.length - looked;
   const errorMsg = invalidKeyError || (rateLimited ? 'Last.fm rate limit reached' : undefined);
   return { tagsById, viaById, looked, viaTrack, skipped, ...(errorMsg ? { error: errorMsg } : {}) };
+}
+
+/**
+ * MusicBrainz id of the artist a Last.fm artist page describes, or null when Last.fm
+ * doesn't link one. Never throws.
+ */
+export async function lastfmArtistMbid(name) {
+  const key = (process.env.LASTFM_API_KEY || '').trim();
+  if (!isLastfmConfigured()) return null;
+  const query = new URLSearchParams({ method: 'artist.getinfo', api_key: key, format: 'json', autocorrect: '1', artist: name });
+  try {
+    const res = await fetch(`${API}?${query}`, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), headers: { 'User-Agent': 'ASTRA-music-universe/1.0' } });
+    const json = await res.json().catch(() => ({}));
+    return json.artist?.mbid || null;
+  } catch {
+    return null;
+  }
 }

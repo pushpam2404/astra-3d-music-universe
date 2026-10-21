@@ -520,6 +520,9 @@ export class GalaxyLayoutEngine {
     this.bounds.similarity = this.bounds.clusters;
   }
 
+  /** 0..1 progress of the glide from the previous map (1 = settled). */
+  morphT = 1;
+
   step(nodes, delta = 16) {
     this.time += (Math.min(delta, 64) / 1000) * Math.max(0, this.orbitMultiplier);
     this.applyPositions(nodes);
@@ -535,6 +538,8 @@ export class GalaxyLayoutEngine {
       if (n.type !== 'genre' || !n.layoutPos) continue;
       const baseAnchor = n.layoutPos[mode] || n.layoutPos.clusters;
       n.position.copy(baseAnchor).multiplyScalar(spread);
+      // While the map refines, glide from where this sun was on the previous map.
+      if (this.morphT < 1 && n.morphFrom) n.position.lerpVectors(n.morphFrom, n.position, this.morphT);
       n.currentClusterRadius = n.layoutRadius[mode] || n.layoutRadius.clusters;
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }
@@ -559,6 +564,7 @@ export class GalaxyLayoutEngine {
           n.position.copy(n.layoutPos[mode] || n.layoutPos.clusters);
         }
       }
+      if (this.morphT < 1 && n.morphFrom) n.position.lerpVectors(n.morphFrom, n.position, this.morphT);
       if (n.meshGroup) n.meshGroup.position.copy(n.position);
     }
 

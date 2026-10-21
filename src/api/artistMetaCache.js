@@ -32,7 +32,8 @@ export function saveArtistMeta(newEntries) {
           g: Array.isArray(val.g) ? val.g : [],
           c: Array.isArray(val.c) ? val.c : [],
           t: Number(val.t) || Date.now(),
-          ...(val.l ? { l: Number(val.l) } : {})
+          ...(val.l ? { l: Number(val.l) } : {}),
+          ...(val.u ? { u: 1 } : {})
         };
       }
     }

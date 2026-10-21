@@ -1,5 +1,6 @@
 // server/routes.js
 import crypto from 'node:crypto';
+import { getGenreVocabulary } from './genreVocabulary.js';
 import express from 'express';
 import { isSpotifyConfigured, getRedirectUri, REQUIRED_SCOPES } from './config.js';
 import { getSession, saveSession, destroySession, parseCookies, setCookie } from './sessions.js';
@@ -11,6 +12,14 @@ import { getLocalHistorySummary, getLocalHistoryStatus } from './historyLoader.j
 const STATE_COOKIE = 'astra_oauth_state';
 
 export const apiRouter = express.Router();
+
+// Genre catalogue (Wikidata + MusicBrainz). Same for everyone, so the CDN caches it.
+apiRouter.get('/genre-vocabulary', async (req, res) => {
+  const vocabulary = await getGenreVocabulary();
+  if (!vocabulary) return res.status(503).json({ error: 'Genre catalogue unavailable right now.' });
+  res.set('Cache-Control', 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=604800');
+  res.json(vocabulary);
+});
 
 apiRouter.get('/auth/status', (req, res) => {
   const session = getSession(req);

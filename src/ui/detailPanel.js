@@ -454,7 +454,10 @@ export class DetailPanel {
         this.ctx.isDemo() ? null : el('p', { class: 'source-note', text: 'From Last.fm, Wikidata and MusicBrainz.' })
       ])));
     } else if (!this.ctx.isDemo()) {
-      parts.push(section('Genres', el('p', { class: 'empty-note', text: 'No genre data found for this artist yet, so they’re placed by home country, collaborations and the artists you play alongside them.' })));
+      const note = node.doubtedTags?.length
+        ? `Last.fm tags this name as ${node.doubtedTags.join(', ')}, which doesn’t match anything you play it with, so those tags probably belong to another artist with the same name. They’re placed by the artists you play alongside them instead.`
+        : 'No genre data found for this artist yet, so they’re placed by home country, collaborations and the artists you play alongside them.';
+      parts.push(section('Genres', el('p', { class: 'empty-note', text: note })));
     }
 
     parts.push(this.actions(node));

@@ -1,0 +1,11 @@
+{
+  "_note": "Test fixtures only. Each listener is seeded from Last.fm's public tag charts (real artists, real songs); the play events are generated. The app never sees these tags.",
+  "kpop-jpop":        ["k-pop", "j-pop", "j-rock", "anime"],
+  "country":          ["country", "americana", "bluegrass", "country rock"],
+  "latin":            ["reggaeton", "regional mexican", "latin pop", "bachata", "corridos"],
+  "afrobeats":        ["afrobeats", "amapiano", "afropop", "highlife"],
+  "metal-punk":       ["thrash metal", "metalcore", "punk rock", "black metal", "pop punk"],
+  "classical-jazz":   ["classical", "jazz", "soundtrack", "bebop", "baroque"],
+  "south-india":      ["tamil", "telugu", "malayalam", "kannada", "carnatic"],
+  "eclectic":         ["indie rock", "techno", "trap", "bossa nova", "shoegaze", "k-pop", "afrobeats", "folk"]
+}
