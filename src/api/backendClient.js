@@ -238,9 +238,15 @@ export async function fetchUniverse(
   } = {}
 ) {
   const hasCachedSpotify = loggedIn && Boolean(getCachedSpotifySignals(forceSpotifyRefresh));
+  // The server path only adds something when the server has a local history folder
+  // (local dev). Otherwise logged-in loads go through the browser path, which caches
+  // Spotify data for 6 hours instead of calling Spotify on every reload.
+  const serverHistory = loggedIn && useLocalHistory && !spotifyApiOnly && !hasCachedSpotify
+    ? (await getHistoryStatus()).available
+    : false;
   if (
     (historySummary?.isAstraHistorySummary && !spotifyApiOnly) ||
-    (loggedIn && (spotifyApiOnly || !useLocalHistory || hasCachedSpotify))
+    (loggedIn && (spotifyApiOnly || !useLocalHistory || hasCachedSpotify || !serverHistory))
   ) {
     return buildBrowserHistoryUniverse(knownMeta, {
       historySummary: spotifyApiOnly ? null : historySummary,
