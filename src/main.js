@@ -1,6 +1,6 @@
 // src/main.js
 import * as THREE from 'three';
-import { animate } from 'motion';
+import { animate as motionAnimate } from 'motion';
 import { GALAXY_PRESETS } from './config/presets.js';
 import { buildUniverseGraph } from './etl/graphNormalizer.js';
 import { getAuthStatus, fetchUniverse, enrichArtists } from './api/backendClient.js';
@@ -514,6 +514,8 @@ async function initApp() {
       }
     } catch (err) {
       console.error('Failed to load universe:', err);
+      // A background refine that fails keeps the map you're looking at.
+      if (refine && !AppState.isDemo) return;
       loadDemo();
       if (err.status === 401) {
         authStatus = { ...authStatus, loggedIn: false };
@@ -548,7 +550,7 @@ async function initApp() {
     morphAnimation?.stop();
     if (reduceMotion.matches) { layout.morphT = 1; return; }
     layout.morphT = 0;
-    morphAnimation = animate(0, 1, {
+    morphAnimation = motionAnimate(0, 1, {
       type: 'spring', visualDuration: 1.4, bounce: 0,
       onUpdate: (t) => { layout.morphT = t; }
     });
