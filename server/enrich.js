@@ -36,7 +36,6 @@ export function isFreshMeta(m) {
 }
 
 /** knownMeta comes from the browser: keep only well-formed strings. */
-export const cleanList = (list, max) => (Array.isArray(list) ? list.filter(x => typeof x === 'string' && x.length < 60).slice(0, max) : []);
 
 /**
  * Looks up the given artists (in priority order) within budgetMs.

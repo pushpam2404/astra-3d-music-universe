@@ -587,55 +587,7 @@ export function clusterArtists(artists, collabs, together = new Map(), { nameabl
     if (newlyPlaced === 0) break;
   }
 
-  // 5. Audio Feature Centroid Proximity:
-  // For any remaining orphan with features (energy, valence, dance, acoustic),
-  // place them into the cluster with the closest acoustic/energy profile
-  const clusterAudioCentroids = new Map();
-  finalLabel.forEach((c, i) => {
-    if (c < 0) return;
-    if (!clusterAudioCentroids.has(c)) clusterAudioCentroids.set(c, { energy: 0, valence: 0, dance: 0, acoustic: 0, count: 0 });
-    const cent = clusterAudioCentroids.get(c);
-    const a = artists[i];
-    cent.energy += a.energy || 0.5;
-    cent.valence += a.valence || 0.5;
-    cent.dance += a.dance || 0.5;
-    cent.acoustic += a.acoustic || 0.2;
-    cent.count++;
-  });
-
-  clusterAudioCentroids.forEach(cent => {
-    if (cent.count > 0) {
-      cent.energy /= cent.count;
-      cent.valence /= cent.count;
-      cent.dance /= cent.count;
-      cent.acoustic /= cent.count;
-    }
-  });
-
-  if (clusterAudioCentroids.size > 0) {
-    finalLabel.forEach((c, i) => {
-      if (c >= 0) return;
-      const a = artists[i];
-      let bestCl = -1;
-      let minD = Infinity;
-      clusterAudioCentroids.forEach((cent, clId) => {
-        const dE = (a.energy || 0.5) - cent.energy;
-        const dV = (a.valence || 0.5) - cent.valence;
-        const dD = (a.dance || 0.5) - cent.dance;
-        const dA = (a.acoustic || 0.2) - cent.acoustic;
-        const dist = Math.hypot(dE, dV, dD, dA);
-        if (dist < minD) {
-          minD = dist;
-          bestCl = clId;
-        }
-      });
-      if (bestCl >= 0) {
-        finalLabel[i] = bestCl;
-      }
-    });
-  }
-
-  // 6. Any artist truly remaining without a cluster stays in uncharted
+  // 5. Any artist truly remaining without a cluster stays in uncharted
   finalLabel.forEach((c, i) => {
     if (c < 0) uncharted.push(artists[i].id);
   });

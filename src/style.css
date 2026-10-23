@@ -1424,14 +1424,16 @@ button.chip:hover {
   color: #070914;
 }
 
-#universe-notice {
+#universe-notice,
+#layers-hidden-note {
   margin-top: 8px;
   color: var(--starlight);
   font-size: 13px;
   pointer-events: auto;
 }
 
-#universe-notice button {
+#universe-notice button,
+#layers-hidden-note button {
   color: inherit;
   text-decoration: underline;
   background: none;
@@ -1880,7 +1882,9 @@ button.chip:hover {
   .search { grid-area: search; }
 
   .brand-tagline,
-  #reset-camera-btn {
+  #reset-camera-btn,
+  #view-toggle-btn span,
+  .search-shortcut {
     display: none;
   }
 
@@ -1980,7 +1984,7 @@ button.chip:hover {
 
   #universe-caption {
     left: 14px;
-    right: 150px;
+    right: 184px;
     bottom: calc(88px + 12px);
     transition: opacity 0.2s;
   }
@@ -2000,6 +2004,18 @@ button.chip:hover {
 
   #universe-stats {
     font-size: 12.5px;
+  }
+}
+
+@media (max-width: 400px) {
+  .brand-text {
+    display: none;
+  }
+}
+
+@media (hover: none) {
+  .search-shortcut {
+    display: none;
   }
 }
 

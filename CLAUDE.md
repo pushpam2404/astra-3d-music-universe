@@ -55,17 +55,16 @@ Any AI agent modifying Astra **must** preserve these invariants:
 
 ### 3.3 100% Opaque 3D Celestial Bodies & Non-Glowing Central Cluster Planets
 * **No Translucent Soap Bubbles**: `createPlanetMaterial()`, `createMoonCrystalMaterial()` (`src/renderer/shaders/planetShader.js`), and `createSolarShaderMaterial()` (`src/renderer/shaders/solarPlasmaShader.js`) must all use `transparent: false`, `depthWrite: true`, and `depthTest: true`. Never toggle `depthWrite = false` on `artistMesh`, `trackMesh`, or `sphereMesh` during focus or lens modes.
-* **Solid, Non-Glowing Central Cluster Planet**: Every cluster has a solid 3D planet at its center (`buildGenreSun` in `src/renderer/celestialFactory.js`). Do **not** attach additive glow sprites (`corona`), nebula clouds (`NEBULA_OPACITY = 0.0`), vertex-wobble plasma halos, or post-processing bloom (`BLOOM_STRENGTH = 0.0` in `src/renderer/postProcessing.js`).
+* **Solid, Non-Glowing Central Cluster Planet**: Every cluster has a solid 3D planet at its center (`buildGenreSun` in `src/renderer/celestialFactory.js`). Do **not** attach additive glow sprites (corona), nebula clouds, vertex-wobble plasma halos, or post-processing bloom. There is no post-processing at all: the frame loop calls `renderer.render(scene, camera)` directly.
 
 ### 3.4 Crisp Black Border on Light-Colored Clusters
 * Light-colored clusters (e.g., pastel pink, lime green, mint, sky blue, yellow, peach, lavender) blend together when nodes overlap unless separated by a dark outline.
 * `solarPlasmaShader.js` and `planetShader.js` compute a screen-space silhouette outline using `radial = sqrt(max(0.0, 1.0 - ndotv * ndotv))` and `fwidth(radial)`, mixing the outer silhouette edge toward near-black (`vec3(0.012, 0.015, 0.025)`) with extra width/strength on higher-luminance cluster colors (`isLight`).
 * UI indicators (`.cluster-swatch`, `.label-dot`, `.chip-dot` in `src/style.css`) also carry a `1.5px solid rgba(0, 0, 0, 0.88)` border with no blurry colored box-shadow on swatches.
 
-### 3.5 Perceptually Distinct Cluster Palette (OKLab Farthest-Point + OKLCH Golden-Angle)
-* `src/config/genreTaxonomy.js` defines the 32-color `CLUSTER_COLORS` palette and precomputes `ORDERED_CLUSTER_COLORS` via greedy farthest-point sampling in **OKLab** perceptual space (`buildFarthestPointPalette`).
-* Clusters are sorted by size/plays descending in `server/clusterNaming.js` and `src/etl/graphNormalizer.js`, and assigned colors via `getDistinctClusterColor(index)` so the largest clusters always receive maximally distant colors and never collide.
-* If a universe has more than 32 clusters, `getDistinctClusterColor(index)` generates additional gamut-clamped colors in **OKLCH** using a `137.5°` golden-angle hue step (`oklchToHex`) rather than wrapping around with `%`.
+### 3.5 Distinct Cluster Palette (OKLCH Golden-Angle)
+* `src/config/genreTaxonomy.js` → `getDistinctClusterColor(index)` steps the hue by the `137.5°` golden angle in **OKLCH** (gamut-clamped by `oklchToHex`), so each new cluster lands in the widest unused hue gap.
+* Clusters are sorted by size/plays descending in `server/clusterNaming.js` and `src/etl/graphNormalizer.js` before colors are assigned, so the largest clusters get the most distinct hues.
 
 ### 3.6 Strict Lens & Focus Culling (Zero Orphan Lines or Floating Labels)
 * **In `CelestialFactory.updateFocus` (`src/renderer/celestialFactory.js`)**:
@@ -78,6 +77,8 @@ Any AI agent modifying Astra **must** preserve these invariants:
   * When `hasLens` is true (including inside Cluster Focus Mode), never label a node unless `nodeMatchesLens(node, activeLens)` is `true`.
 * **Synchronized Cluster Explorer (`src/ui/detailPanel.js`)**:
   * Clicking an inline memory/era filter pill inside the Cluster detail panel invokes `onSetLens(f.id)` so the 3D canvas, top lens bar, and side-panel list always stay in sync.
+* **Data-driven lenses (`src/config/lenses.js`)**: the lens bar, cluster filters and artist song filters all come from `availableLenses(nodes)`: the four memory lenses plus one `era_YYYY` / `early_YYYY` lens per year present in the history (years up to 2022 share `era_2020_2022`). Never hardcode years; a lens that matches nothing is not shown.
+* **URL state (`src/main.js` → `writeUrl` / `applyUrl`)**: the selected node and active lens live in `?node=&lens=`, so Back/Forward step through views and links reopen them. Unknown ids in a link are ignored and dropped from the URL.
 
 ### 3.7 3D Planet Collision Clearance
 * `src/physics/galaxyLayout.js` runs `resolveClusterArtistOverlaps` per cluster and `resolveArtistCollisions(artists, 18)` globally so no two artist planets overlap and no artist clips into its central cluster planet (`coreRadius`).
@@ -90,8 +91,8 @@ Any AI agent modifying Astra **must** preserve these invariants:
 * **No hardcoded genre knowledge.** There are no genre families, alias tables, mood/junk/broad-tag lists, demonym tables or occupation→genre maps. Don't add any. Every decision comes from public data or from the library itself:
   * **Which tags are genres** (`src/etl/genreSignals.js` → `selectGenreTags`): a tag is a genre if Wikidata or MusicBrainz lists it as one (catalogue from `server/genreVocabulary.js`, served CDN-cached at `GET /api/genre-vocabulary`, kept 7 days in `localStorage` as `astra_genre_vocab_v1`); it's a home country if it matches an Intl region name; it's a language scene ("tamil", "haryanvi") if it matches an Intl language name; any other tag counts only if it passes the coherence test (the artists carrying it sound alike well above the library's background). Coherent-only tags help grouping but can't name clusters (`nameable`). Each catalogue genre is displayed in the listener's own most-used spelling.
   * **How genres relate** (`server/clustering.js` → `buildTagVectors`): TF-IDF over genre + `@country` tags, expanded with tag relatedness learned from co-occurrence in the library (PPMI, `RELATED_WEIGHT`).
-  * **Naming** (`server/clusterNaming.js`): BERTopic-style class-based TF-IDF over nameable tags, weighted by √listening, with a consensus floor (`MIN_SUPPORT` of the cluster's listening, at least 2 artists). Never `Artist & Co.`, moods, invented themes, or anything from `estimatedFeatures` (hash-based, not real audio). If a group can't get an unused real-genre name it returns `duplicateOf` and the groups merge.
-  * **Genre groups** (`clusterArtists`): a Louvain group exists only if `MIN_GENRE_SHARE` (25%) of its listening has real genres; otherwise its artists join the most similar genre group (co-listening, collaborations, tags) or **Genre Unknown**.
+  * **Naming** (`server/clusterNaming.js`): BERTopic-style class-based TF-IDF over nameable tags, weighted by √listening, with a consensus floor (`MIN_SUPPORT` of the cluster's listening, at least 2 artists). Never `Artist & Co.`, moods, invented themes, or made-up audio features (there are none: the old hash-based `estimatedFeatures` were removed). If a group can't get an unused real-genre name it returns `duplicateOf` and the groups merge.
+  * **Genre groups** (`clusterArtists`): a Louvain group exists only if `MIN_GENRE_SHARE` (25%) of its listening has real genres; otherwise its artists join the most similar genre group (co-listening, collaborations, tags) or **Genre Unknown**. Artists with no signal at all also go to Genre Unknown; never place them by guesswork.
 * **Same-name artists (`server/enrich.js`)**: history-only artists whose Last.fm tags are missing or came from the shared artist page are looked up on MusicBrainz through one of their own songs (`searchMusicBrainzByTrack`). If Last.fm's artist page links a different MusicBrainz artist (`lastfmArtistMbid`), its tags are dropped. Tags resting only on the artist page are flagged `u`, and `doubtGenresAgainstContext` drops them when they fit none of the artists you play alongside it; the detail panel then says so (`doubtedTags`).
 * **Taste tests (`tests/tastes/`)**: `generate.mjs` builds Spotify-format histories for 8 very different listeners from Last.fm's public charts, `truth.mjs` records which chart each artist came from, and `run.mjs` runs the full pipeline and reports group names plus purity / Adjusted Rand Index against that truth. Run `node tests/tastes/run.mjs` after any change to tags, similarity, clustering or naming. Fixtures and lookup cache live in the gitignored `tests/tastes/.cache/`. Current mean: ARI 0.683, purity 0.855 (the old hardcoded pipeline: 0.524 / 0.731).
 * **Metadata Caching & POST Ceiling (`src/api/backendClient.js`, `server/enrich.js`, `src/api/artistMetaCache.js`)**:
@@ -111,11 +112,11 @@ Any AI agent modifying Astra **must** preserve these invariants:
    * `mergeSignalsAndRank` merges Spotify top charts, recent plays, Liked Songs, and `historySummary`, deduplicating tracks by normalized primary artist + cleaned track title and extracting featured collaborators.
    * `assembleUniverseFromSignals` combines cached/enriched genre & country metadata, builds session co-listening pairs (`listenedTogether`), runs `clusterArtists` (TF-IDF + collaboration + co-listening similarity graph → seeded Louvain communities → seeded 3D UMAP embedding), and names clusters via `describeClusters` (`server/clusterNaming.js`).
 3. **Graph Normalization & Layout (`src/etl/graphNormalizer.js` + `src/physics/galaxyLayout.js`)**:
-   * `buildUniverseGraph` log-normalizes node radii (`TIER_BOUNDS`), assigns `ORDERED_CLUSTER_COLORS` by cluster size, and builds edges (`artist_genre`, `artist_bridge`, `track_artist`, `track_collab`).
+   * `buildUniverseGraph` log-normalizes node radii (`TIER_BOUNDS`), assigns `getDistinctClusterColor` colors by cluster size, and builds edges (`artist_genre`, `artist_bridge`, `track_artist`, `track_collab`).
    * `GalaxyLayoutEngine.initializeNodePositions` seriates clusters by affinity on a Fibonacci sphere (`computeBalancedClusterAnchors`), blends artist UMAP offsets with spherical shells, runs 3D collision resolution, and assigns inclined lunar orbits to tracks.
 4. **Frame Loop (`src/main.js` → `animate`)**:
    * `easeViewOffset()` centers the 3D viewport beside the desktop side panel or above the mobile bottom sheet.
    * `layout.step()` updates orbiting song moon positions.
    * `factory.updateArtistInstances()`, `updateTrackInstances()`, `updateEdgeGeometry()`, `updatePulses()`, `updateSolarShaders()`, and `updateFocus()` update GPU buffers and focus highlights.
    * `pickNode()` raycasts every 3rd frame for hover states and handles multi-touch-safe tap/double-tap selection (`pointerdown`/`pointerup` ignores pinch-to-zoom gestures).
-   * `labelProjector.update()` projects and overlap-culls DOM labels, and `composer.render()` renders the frame.
+   * `labelProjector.update()` projects and overlap-culls DOM labels, and `renderer.render()` draws the frame.

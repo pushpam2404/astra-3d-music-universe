@@ -8,6 +8,7 @@
 import { SPOTIFY_LOGIN_URL, logout } from '../api/backendClient.js';
 import { nodeMatchesLens } from '../renderer/celestialFactory.js';
 import { itemMetaLabel } from './detailPanel.js';
+import { availableLenses, lensDescription } from '../config/lenses.js';
 import {
   springIn,
   animateDialogIn,
@@ -21,22 +22,10 @@ const KIND_LABEL = { genre: 'Cluster', artist: 'Artist', track: 'Song' };
 const KIND_ORDER = { genre: 0, artist: 1, track: 2 };
 const MAX_RESULTS = 14;
 
-const LENS_DESCRIPTIONS = {
-  all: null,
-  past_fav: 'Showing Past Favorites — songs & artists you played heavily in past eras but rarely recently.',
-  dormant: 'Showing Dormant Gems — loved songs & artists you haven’t played in 4+ months.',
-  current_rotation: 'Showing Current Rotation — actively played in the last 60 days or top charts.',
-  all_time_staple: 'Showing All-Time Staples — played consistently across 3+ years.',
-  era_2026: 'Showing 2026 Era — music shaping your 2026 listening.',
-  early_2025: 'Showing Early 2025 Era — songs and artists that peaked in Jan–Apr 2025.',
-  era_2025: 'Showing 2025 Era — songs and artists heavily played in 2025.',
-  early_2024: 'Showing Early 2024 Era — songs and artists that peaked in Jan–Apr 2024.',
-  era_2024: 'Showing 2024 Era — songs and artists heavily played in 2024.',
-  era_2023: 'Showing 2023 Era — songs and artists heavily played in 2023.',
-  era_2020_2022: 'Showing 2020–2022 Era — your earliest recorded Spotify years.'
-};
-
 const $ = (id) => document.getElementById(id);
+
+/** "2024" for one year, "2020–2026" for several. `years` must be sorted. */
+export const yearRange = (years) => (years.length > 1 ? `${years[0]}–${years[years.length - 1]}` : String(years[0] ?? ''));
 
 /**
  * Updates the exact "Pending vs. Newly Enriched on Reload" HUD counter banner.
@@ -144,7 +133,7 @@ export class Hud {
       if (!q) return close();
       results = this.state.nodes
         .filter(n => {
-          if (n.meshGroup?.visible === false) return false;
+          // Hidden layers stay searchable; choosing a hidden node turns its layer back on.
           if (n.name?.toLowerCase().includes(q)) return true;
           if (n.connectedArtists?.[0]?.toLowerCase().includes(q)) return true;
           if (n.history?.peakEra?.toLowerCase().includes(q)) return true;
@@ -207,6 +196,10 @@ export class Hud {
     });
 
     input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && list.hidden) {
+        input.blur();
+        return;
+      }
       if (list.hidden) return;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
@@ -240,11 +233,11 @@ export class Hud {
     });
 
     const banner = $('active-lens-banner');
-    const desc = LENS_DESCRIPTIONS[this.state.activeLens];
+    const desc = lensDescription(this.state.activeLens);
     if (desc) {
       banner.replaceChildren();
       const span = document.createElement('span');
-      span.textContent = desc;
+      span.textContent = `Showing ${desc}`;
       const clearBtn = document.createElement('button');
       clearBtn.type = 'button';
       clearBtn.textContent = 'Reset';
@@ -261,8 +254,27 @@ export class Hud {
     this.cb.onLensChange?.(this.state.activeLens);
   }
 
-  setLensBarVisible(visible) {
-    $('lens-bar').hidden = !visible;
+  /** Shows only the lenses that match something in this universe; hides the bar if none do. */
+  renderLensBar(enabled = true) {
+    const lenses = enabled ? availableLenses(this.state.nodes) : [];
+    const scroll = $('lens-bar').querySelector('.lens-scroll');
+    const pill = ({ id, label }) => {
+      const btn = Object.assign(document.createElement('button'), { type: 'button', className: 'lens-pill', textContent: label });
+      btn.dataset.lens = id;
+      attachPressFeedback(btn);
+      return btn;
+    };
+    const firstEra = lenses.findIndex(l => l.id.startsWith('era_') || l.id.startsWith('early_'));
+    const pills = [pill({ id: 'all', label: 'All time' }), ...lenses.map(pill)];
+    if (firstEra > 0) {
+      const divider = Object.assign(document.createElement('span'), { className: 'lens-divider' });
+      divider.setAttribute('aria-hidden', 'true');
+      pills.splice(firstEra + 1, 0, divider);
+    }
+    scroll.replaceChildren(...pills);
+    $('lens-bar').hidden = !lenses.length;
+    if (this.state.activeLens !== 'all' && !lenses.some(l => l.id === this.state.activeLens)) this.state.activeLens = 'all';
+    scroll.querySelectorAll('.lens-pill').forEach(btn => btn.classList.toggle('is-active', btn.dataset.lens === this.state.activeLens));
   }
 
   /* ---------- View settings ---------- */
@@ -288,11 +300,9 @@ export class Hud {
     });
 
     ['genres', 'artists', 'tracks', 'edges', 'labels'].forEach(layer => {
-      $(`toggle-${layer}`).addEventListener('change', (e) => {
-        this.state.layers[layer] = e.target.checked;
-        this.cb.onLayersChange();
-      });
+      $(`toggle-${layer}`).addEventListener('change', (e) => this.setLayer(layer, e.target.checked));
     });
+    $('layers-reset-btn').addEventListener('click', () => ['genres', 'artists', 'tracks'].forEach(l => this.setLayer(l, true)));
 
     const histCheckbox = $('toggle-history-songs');
     if (histCheckbox) {
@@ -328,6 +338,14 @@ export class Hud {
       $('node-scale-val').textContent = `${v}×`;
       this.cb.onNodeScale(v);
     });
+  }
+
+  setLayer(layer, on) {
+    this.state.layers[layer] = on;
+    $(`toggle-${layer}`).checked = on;
+    const { genres, artists, tracks } = this.state.layers;
+    $('layers-hidden-note').hidden = genres || artists || tracks;
+    this.cb.onLayersChange();
   }
 
   syncHistoryToggleUI() {
@@ -558,7 +576,7 @@ export class Hud {
       container.replaceChildren();
       const empty = document.createElement('p');
       empty.className = 'empty-note';
-      empty.textContent = 'Import your Spotify Streaming History (via the History button above) to unlock past favorites, dormant gems and 2020–2026 time capsules.';
+      empty.textContent = 'Import your Spotify streaming history (History, top right) to see past favorites, songs you haven’t heard in a while, and yearly time capsules.';
       container.append(empty);
       return;
     }
@@ -573,14 +591,11 @@ export class Hud {
       .sort((a, b) => (b.history.plays * Math.sqrt(b.history.daysSinceLast)) - (a.history.plays * Math.sqrt(a.history.daysSinceLast)))
       .slice(0, 12);
 
-    const early2024 = tracks
-      .filter(t => t.history?.tags?.includes('early_2024') || t.history?.peakYear === '2024')
-      .sort((a, b) => (b.history.byYear?.['2024'] || 0) - (a.history.byYear?.['2024'] || 0))
-      .slice(0, 10);
-
-    const early2025 = tracks
-      .filter(t => t.history?.tags?.includes('early_2025') || t.history?.peakYear === '2025')
-      .sort((a, b) => (b.history.byYear?.['2025'] || 0) - (a.history.byYear?.['2025'] || 0))
+    // Time capsules for the two most recent years in the history.
+    const years = Object.keys(this.state.rawDataset?.historyMeta?.years || {}).sort().reverse().slice(0, 2);
+    const yearTracks = (year) => tracks
+      .filter(t => t.history?.peakYear === year)
+      .sort((a, b) => (b.history.byYear?.[year] || 0) - (a.history.byYear?.[year] || 0))
       .slice(0, 10);
 
     const buildGroup = (title, subtitle, lensId, items) => {
@@ -646,18 +661,12 @@ export class Hud {
         'dormant',
         dormantGems
       ),
-      buildGroup(
-        '2025 Era Favorites',
-        'Songs that defined your Early & Mid 2025 listening.',
-        'era_2025',
-        early2025
-      ),
-      buildGroup(
-        '2024 Time Capsule',
-        'Songs you had on heavy rotation back in 2024.',
-        'era_2024',
-        early2024
-      )
+      ...years.map((year, i) => buildGroup(
+        i === 0 ? `${year} Favorites` : `${year} Time Capsule`,
+        `Songs you had on heavy rotation in ${year}.`,
+        Number(year) <= 2022 ? 'era_2020_2022' : `era_${year}`,
+        yearTracks(year)
+      ))
     ].filter(Boolean);
 
     container.replaceChildren(...groups);
@@ -744,6 +753,7 @@ export class Hud {
     };
 
     openBtn.addEventListener('click', () => {
+      this.setHistoryFeedback(null);
       this.updateHistoryDialogStatus();
       this.syncHistoryToggleUI();
       dialog.showModal();
@@ -781,10 +791,11 @@ export class Hud {
 
     const handleFiles = async (fileList) => {
       if (!fileList || !fileList.length) return;
-      this.setHistoryFeedback('Reading and analyzing your listening history files…', false);
+      this.setHistoryFeedback(`Reading ${fileList.length === 1 ? '1 file' : `${fileList.length} files`}…`, false);
       try {
-        await this.cb.onImportFiles?.(fileList);
-        this.setHistoryFeedback('Listening history imported and mapped!', false);
+        await this.cb.onImportFiles?.(fileList, (message) => this.setHistoryFeedback(message, false));
+        this.updateHistoryDialogStatus();
+        this.setHistoryFeedback('Imported and mapped.', false);
         setTimeout(() => {
           if (dialog.open) dialog.close();
         }, 550);
@@ -839,6 +850,15 @@ export class Hud {
     const hm = this.state.rawDataset?.historyMeta;
     const local = this.authStatus?.localHistory;
     const spotifyOnly = Boolean(this.state.spotifyApiOnly || this.state.layers.historySongs === false);
+    const loggedIn = Boolean(this.authStatus?.loggedIn);
+    const hasHistory = Boolean(hm?.validPlays || this.state.historySummary);
+
+    // Only offer what applies: the source choice needs Spotify, removing needs history,
+    // exporting needs a real universe.
+    $('mode-merged-btn').hidden = $('mode-spotify-only-btn').hidden = !loggedIn;
+    $('remove-history-btn').hidden = !hasHistory;
+    $('history-source-mode-section').hidden = !loggedIn && !hasHistory;
+    $('history-export-section').hidden = Boolean(this.state.isDemo);
 
     if (local?.available) {
       localBtn.hidden = false;
@@ -857,7 +877,7 @@ export class Hud {
       `;
     } else if (hm?.validPlays) {
       const years = Object.keys(hm.years || {}).sort();
-      const yearSpan = years.length ? `${years[0]}–${years[years.length - 1]}` : `${hm.firstDate} to ${hm.lastDate}`;
+      const yearSpan = years.length ? yearRange(years) : `${hm.firstDate} to ${hm.lastDate}`;
       box.innerHTML = `
         <div class="status-pill-row">
           <span class="status-dot is-active"></span>

@@ -8,6 +8,7 @@
 import { nodeMatchesLens } from '../renderer/celestialFactory.js';
 import { formatMonthYear, formatRelativeDays } from '../etl/historyParser.js';
 import { animateSparkbars } from './motionFx.js';
+import { availableLenses } from '../config/lenses.js';
 
 const RANGE_LABEL = { short_term: 'last 4 weeks', medium_term: 'last 6 months', long_term: 'all time' };
 const RANGE_ORDER = ['long_term', 'medium_term', 'short_term'];
@@ -267,17 +268,7 @@ export class DetailPanel {
 
     const filters = [
       { id: 'all', label: 'All' },
-      { id: 'past_fav', label: 'Past favs' },
-      { id: 'dormant', label: 'Dormant' },
-      { id: 'current_rotation', label: 'Current' },
-      { id: 'all_time_staple', label: 'Staples' },
-      { id: 'era_2026', label: '2026' },
-      { id: 'early_2025', label: 'Early 2025' },
-      { id: 'era_2025', label: '2025' },
-      { id: 'early_2024', label: 'Early 2024' },
-      { id: 'era_2024', label: '2024' },
-      { id: 'era_2023', label: '2023' },
-      { id: 'era_2020_2022', label: '2020–22' }
+      ...availableLenses([...artists, ...allClusterTracks]).map(l => ({ id: l.id, label: l.short }))
     ];
 
     const modeArtistsBtn = el('button', { type: 'button', class: 'sub-tab is-active', text: `Artists (${artists.length})` });
@@ -418,12 +409,7 @@ export class DetailPanel {
       const filterDefs = [
         { id: 'all', label: `All (${tracks.length})` },
         ...(collabTracksCount > 0 ? [{ id: 'collabs', label: `Collabs (${collabTracksCount})` }] : []),
-        ...(node.history ? [
-          { id: 'past_fav', label: 'Past favs' },
-          { id: 'dormant', label: 'Dormant' },
-          { id: 'era_2025', label: '2025' },
-          { id: 'era_2024', label: '2024' }
-        ] : [])
+        ...availableLenses(tracks).map(l => ({ id: l.id, label: l.short }))
       ];
 
       const filterBar = (tracks.length >= 3 || collabTracksCount > 0) && filterDefs.length > 1

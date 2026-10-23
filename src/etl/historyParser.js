@@ -167,14 +167,9 @@ export function computeTemporalProfile(entry, refTs, kind = 'track') {
       else tags.push(`era_${y}`);
     }
   }
-  if (peakEra.includes('2024')) {
-    tags.push('peak_2024');
-    if (peakEra.startsWith('Early')) tags.push('early_2024');
-  }
-  if (peakEra.includes('2025')) {
-    tags.push('peak_2025');
-    if (peakEra.startsWith('Early')) tags.push('early_2025');
-  }
+  // Years up to 2022 share one era lens, so only later years get an "Early" lens.
+  const [eraPart, eraYear] = peakEra.split(' ');
+  if (eraPart === 'Early' && Number(eraYear) > 2022) tags.push(`early_${eraYear}`);
 
   let status = 'casual';
   let statusLabel = `Heard in ${peakEra}`;

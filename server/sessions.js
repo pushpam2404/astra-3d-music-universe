@@ -34,7 +34,9 @@ export function parseCookies(req) {
   const out = {};
   (req.headers.cookie || '').split(';').forEach(part => {
     const idx = part.indexOf('=');
-    if (idx > 0) out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
+    if (idx <= 0) return;
+    // Cookies on 127.0.0.1 are shared with other local apps; skip any we can't decode.
+    try { out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim()); } catch { /* not ours */ }
   });
   return out;
 }

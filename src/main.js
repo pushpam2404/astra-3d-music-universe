@@ -16,12 +16,11 @@ import {
   exportListeningHistoryCsv
 } from './api/historyStorage.js';
 import { createUniverseScene } from './renderer/universeScene.js';
-import { initPostProcessing, BLOOM_STRENGTH } from './renderer/postProcessing.js';
 import { CelestialFactory, nodeMatchesLens } from './renderer/celestialFactory.js';
 import { GalaxyLayoutEngine } from './physics/galaxyLayout.js';
 import { CameraFlightController } from './renderer/cameraController.js';
 import { LabelProjector } from './renderer/labelProjector.js';
-import { Hud } from './ui/hud.js';
+import { Hud, yearRange } from './ui/hud.js';
 import { DetailPanel } from './ui/detailPanel.js';
 
 const AppState = {
@@ -50,7 +49,6 @@ const plural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString()}
 
 async function initApp() {
   const { scene, camera, renderer, controls } = createUniverseScene(document.getElementById('webgl-canvas-container'));
-  const { composer, bloomPass } = initPostProcessing(renderer, scene, camera);
 
   const viewShift = { x: 0, y: 0, tx: 0, ty: 0 };
   let sheetCover = () => 88;
@@ -84,19 +82,55 @@ async function initApp() {
 
   // ---------- Selection ----------
 
+  const LAYER_OF = { genre: 'genres', artist: 'artists', track: 'tracks' };
+
   function selectNode(node) {
     if (!node) return;
+    if (!AppState.layers[LAYER_OF[node.type]]) hud.setLayer(LAYER_OF[node.type], true);
     AppState.selectedNode = node;
     cameraController.flyToNode(node);
     detailPanel.render(node);
     hud.showDetails();
+    writeUrl();
   }
 
   function clearSelection() {
     AppState.selectedNode = null;
     hud.showClusters();
     if (hud.isPhone()) hud.setSheet(false);
+    writeUrl();
   }
+
+  // The selection and lens live in the URL, so Back steps through what you looked at
+  // and any view can be shared as a link.
+  let restoringUrl = false;
+  function writeUrl({ replace = false } = {}) {
+    if (restoringUrl) return;
+    const params = new URLSearchParams();
+    if (AppState.selectedNode) params.set('node', AppState.selectedNode.id);
+    if (AppState.activeLens !== 'all') params.set('lens', AppState.activeLens);
+    const next = params.toString() ? `?${params}` : '';
+    if (next !== window.location.search) window.history[replace ? 'replaceState' : 'pushState'](null, '', next || window.location.pathname);
+  }
+  function applyUrl() {
+    const params = new URLSearchParams(window.location.search);
+    restoringUrl = true;
+    try {
+      const lens = params.get('lens') || 'all';
+      const knownLens = lens === 'all' || document.querySelector(`#lens-bar .lens-pill[data-lens="${CSS.escape(lens)}"]`);
+      if (knownLens && lens !== AppState.activeLens) hud.setLens(lens);
+      const node = AppState.nodeMap.get(params.get('node'));
+      if (node && node !== AppState.selectedNode) selectNode(node);
+      else if (!node && AppState.selectedNode) {
+        clearSelection();
+        cameraController.resetOverview();
+      }
+    } finally {
+      restoringUrl = false;
+    }
+    writeUrl({ replace: true }); // drop unknown ids from a shared or stale link
+  }
+  window.addEventListener('popstate', applyUrl);
 
   const detailPanel = new DetailPanel(document.getElementById('detail-content'), {
     resolve: (id) => AppState.nodeMap.get(id),
@@ -169,14 +203,11 @@ async function initApp() {
       }
     },
     onLensChange: () => {
+      writeUrl();
       factory.focusKey = null;
       if (AppState.selectedNode) detailPanel.render(AppState.selectedNode);
     },
     onSheetChange: () => updateViewOffset(),
-    onGlow: (level) => {
-      bloomPass.strength = BLOOM_STRENGTH * level;
-      factory.setGlow(level, AppState.nodes);
-    },
     onOrbitSpeed: (speed) => {
       layout.orbitMultiplier = speed;
       controls.autoRotate = speed > 0;
@@ -192,8 +223,9 @@ async function initApp() {
       layout.boundingRadius = layout.bounds[layout.mode] * spread;
       cameraController.setSceneRadius(layout.boundingRadius);
     },
-    onImportFiles: async (fileList) => {
+    onImportFiles: async (fileList, progress) => {
       const parsed = await parseImportedFiles(fileList);
+      if (parsed.kind === 'history') progress?.(`Found ${parsed.historySummary.validPlays.toLocaleString()} plays. Building your map…`);
       AppState.spotifyApiOnly = false;
       AppState.layers.historySongs = true;
       hud.syncHistoryToggleUI();
@@ -378,8 +410,7 @@ async function initApp() {
     const totalClusters = dataset.genres?.length || AppState.rawDataset?.genres?.length || AppState.nodes.filter(n => n.type === 'genre').length;
 
     if (hm?.validPlays && !AppState.spotifyApiOnly && AppState.layers.historySongs !== false) {
-      const years = Object.keys(hm.years || {}).sort();
-      const span = years.length ? `${years[0]}–${years[years.length - 1]}` : '';
+      const span = yearRange(Object.keys(hm.years || {}).sort());
       hud.setCaption(
         dataset.name || 'Your Complete Music Universe',
         `${plural(totalArtists, 'artist')} & ${plural(totalTracks, 'song')} in ${plural(totalClusters, 'cluster')} · ${hm.validPlays.toLocaleString()} plays (${hm.totalHours?.toLocaleString() || '—'} hrs${span ? `, ${span}` : ''})`
@@ -427,7 +458,7 @@ async function initApp() {
 
     suns = AppState.nodes.filter(n => n.type === 'genre');
     labelProjector.syncLabels(AppState.nodes, selectNode);
-    hud.setLensBarVisible(Boolean(!AppState.isDemo || rawDataset.historyMeta));
+    hud.renderLensBar(Boolean(!AppState.isDemo || rawDataset.historyMeta));
     hud.updateHistoryButtonBadge();
     applyLayerVisibility();
     hud.restoreSettings();
@@ -654,7 +685,6 @@ async function initApp() {
     factory.updateEdgeGeometry(AppState.edges);
     factory.updatePulses(AppState.pulseParticles, layout.orbitMultiplier);
     factory.updateSolarShaders(now * 0.001);
-    factory.updateNebulae(camera, suns);
     factory.updateFocus(AppState.selectedNode, AppState.nodes, AppState.edges, AppState.activeLens, AppState.hoveredNode);
 
     cameraController.update(AppState.selectedNode);
@@ -676,7 +706,7 @@ async function initApp() {
       AppState.activeLens,
       AppState.hoveredNode
     );
-    composer.render();
+    renderer.render(scene, camera);
   }
   requestAnimationFrame(animate);
 
@@ -690,6 +720,7 @@ async function initApp() {
     loadDemo();
     if (authError) hud.setNotice(`Spotify login didn’t complete: ${authError}`);
   }
+  applyUrl();
 
   if (import.meta.env.DEV) window.__astra = { loadDataset, AppState };
 }

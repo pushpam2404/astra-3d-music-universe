@@ -29,7 +29,7 @@
 
     <div class="search" role="search">
       <svg class="search-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-      <input type="search" id="search-input" placeholder="Find an artist, song, cluster or era (e.g. 2024, dormant)" autocomplete="off" aria-label="Search your universe">
+      <input type="search" id="search-input" placeholder="Find an artist, song or cluster" autocomplete="off" aria-label="Search your universe">
       <kbd class="search-shortcut" title="Press ⌘K or / to search">⌘K</kbd>
       <ul id="search-results" role="listbox" hidden></ul>
     </div>
@@ -39,7 +39,7 @@
         <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
         <span>History</span>
       </button>
-      <button id="view-toggle-btn" class="btn btn-quiet" type="button" aria-expanded="false" aria-controls="view-panel">
+      <button id="view-toggle-btn" class="btn btn-quiet" type="button" aria-label="View options" aria-expanded="false" aria-controls="view-panel">
         <svg class="btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
         <span>View</span>
       </button>
@@ -58,18 +58,6 @@
   <nav id="lens-bar" aria-label="Listening memory and era lenses" hidden>
     <div class="lens-scroll">
       <button type="button" class="lens-pill is-active" data-lens="all">All time</button>
-      <button type="button" class="lens-pill" data-lens="past_fav" title="Heavily played in earlier eras, rarely played recently">Past favorites</button>
-      <button type="button" class="lens-pill" data-lens="dormant" title="Songs and artists you loved but haven't heard in 4+ months">Haven’t heard in a while</button>
-      <button type="button" class="lens-pill" data-lens="current_rotation" title="Actively played in the last 60 days or current top charts">Current rotation</button>
-      <button type="button" class="lens-pill" data-lens="all_time_staple" title="Played consistently across 3+ years">All-time staples</button>
-      <span class="lens-divider" aria-hidden="true"></span>
-      <button type="button" class="lens-pill" data-lens="era_2026">2026</button>
-      <button type="button" class="lens-pill" data-lens="early_2025">Early 2025</button>
-      <button type="button" class="lens-pill" data-lens="era_2025">2025</button>
-      <button type="button" class="lens-pill" data-lens="early_2024">Early 2024</button>
-      <button type="button" class="lens-pill" data-lens="era_2024">2024</button>
-      <button type="button" class="lens-pill" data-lens="era_2023">2023</button>
-      <button type="button" class="lens-pill" data-lens="era_2020_2022">2020–22</button>
     </div>
   </nav>
 
@@ -166,6 +154,7 @@
     <p id="universe-stats"></p>
     <div id="enrichment-status-banner" class="enrichment-banner" hidden></div>
     <p id="universe-notice" hidden></p>
+    <p id="layers-hidden-note" hidden>All layers are hidden. <button type="button" id="layers-reset-btn">Show everything</button></p>
   </div>
 
   <!-- Loading -->
@@ -183,13 +172,12 @@
       <h2>Listening History · Import &amp; Export</h2>
       <button type="button" id="history-close-btn" class="btn btn-quiet" aria-label="Close">✕</button>
     </div>
-    <p class="modal-lead">Merge your Spotify Extended Streaming History (<code>Streaming_History_Audio_*.json</code>) or standard Account Data with your live Spotify stats, or switch anytime to only the songs from the Spotify API.</p>
+    <p class="modal-lead">Add your Spotify streaming history to map years of listening, not just your current top charts.</p>
 
     <div id="history-status-box" class="history-status-box"></div>
 
     <div class="modal-section" id="history-source-mode-section">
-      <h3>Active Songs &amp; Data Source</h3>
-      <p class="modal-sub">Choose whether to include all songs from your streaming history or keep only the songs and artists returned by the live Spotify API.</p>
+      <h3>Songs to show</h3>
       <div class="modal-export-actions">
         <button type="button" id="mode-merged-btn" class="btn btn-starlight">Spotify + History Songs</button>
         <button type="button" id="mode-spotify-only-btn" class="btn">Spotify API Songs Only</button>
@@ -198,10 +186,10 @@
     </div>
 
     <div class="modal-section">
-      <h3>Import History or Snapshot</h3>
+      <h3>Import</h3>
       <div id="history-dropzone" class="history-dropzone">
         <p class="dropzone-title">Drop your Spotify History folder or <code>.json</code> files here</p>
-        <p class="dropzone-sub">Accepts <code>Streaming_History_Audio_*.json</code>, <code>StreamingHistory_music_*.json</code>, or an exported <code>astra-universe-*.json</code> snapshot.</p>
+        <p class="dropzone-sub"><code>Streaming_History_Audio_*.json</code>, <code>StreamingHistory_music_*.json</code>, or an <code>astra-universe-*.json</code> snapshot</p>
         <div class="dropzone-actions">
           <button type="button" id="import-folder-btn" class="btn btn-starlight">Choose History Folder</button>
           <button type="button" id="import-files-btn" class="btn">Choose JSON Files</button>
@@ -213,9 +201,9 @@
       <p id="history-feedback" class="history-feedback" hidden></p>
     </div>
 
-    <div class="modal-section">
-      <h3>Export Your Universe</h3>
-      <p class="modal-sub">Save your compiled 3D galaxy (clusters, 3D coordinates, cached genres and multi-year history) or download a complete spreadsheet of every artist and song.</p>
+    <div class="modal-section" id="history-export-section">
+      <h3>Export</h3>
+      <p class="modal-sub">Save this universe to reload later, or download a spreadsheet of every artist and song.</p>
       <div class="modal-export-actions">
         <button type="button" id="export-json-btn" class="btn btn-starlight">Export Universe Snapshot (.json)</button>
         <button type="button" id="export-csv-btn" class="btn">Export Listening Summary (.csv)</button>

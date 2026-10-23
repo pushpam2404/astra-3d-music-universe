@@ -6,11 +6,10 @@ import { getDistinctClusterColor, UNCLASSIFIED_FAMILY } from '../config/genreTax
  * Normalizes raw celestial entities (genres, artists, tracks) into graph nodes & edges
  * using Base-10 Logarithmic Normalization to prevent Zipf power-law visual collapse.
  *
- * Assigns each cluster (in size order) a unique maximally-distant color from
- * `ORDERED_CLUSTER_COLORS` (and 137.5° OKLCH overflow past 24 clusters) so even
- * cached snapshots immediately display distinct cluster colors without collisions.
+ * Assigns each cluster (in size order) a distinct color from `getDistinctClusterColor`,
+ * so cached snapshots get the same colors too.
  */
-export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
+export function buildUniverseGraph(rawDataset) {
   const { genres = [], artists = [], tracks = [] } = rawDataset;
 
   // Sort non-uncharted clusters by size/plays descending to assign greedy farthest-point colors in size order
@@ -45,7 +44,7 @@ export function buildUniverseGraph(rawDataset, timeMultiplier = 1.0) {
   };
 
   const processedNodes = rawNodes.map(node => {
-    const plays = Math.max(1, Math.round((node.basePlays || 10) * timeMultiplier));
+    const plays = Math.max(1, Math.round(node.basePlays || 10));
     const logPlays = Math.log10(plays + 1);
     const tierStat = statsByTier[node.type];
     if (tierStat) {

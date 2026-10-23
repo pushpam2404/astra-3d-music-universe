@@ -4,11 +4,8 @@ import { createSolarShaderMaterial } from './shaders/solarPlasmaShader.js';
 import { createPlanetMaterial, createMoonCrystalMaterial } from './shaders/planetShader.js';
 import { COLOR_SPOTIFY_GREEN } from '../config/constants.js';
 
-const sunGlowTextureCache = new Map();
-
 const FOCUS_LERP = 0.24;
 const SUN_LIGHT_INTENSITY = 1.0;
-const NEBULA_OPACITY = 0.0;
 const MAX_PULSES = 450;
 const STARLIGHT_HEX = '#F4E9C8';
 
@@ -42,46 +39,6 @@ export function nodeMatchesLens(node, lens) {
   if (h.status === lens) return true;
   if (Array.isArray(h.tags) && h.tags.includes(lens)) return true;
   return false;
-}
-
-export function applyArtistIsolationMode(sceneState, selectedArtistId) {
-  if (!sceneState) return;
-  if (sceneState.factory && Array.isArray(sceneState.nodes)) {
-    const targetNode = selectedArtistId
-      ? sceneState.nodes.find(n => n.id === selectedArtistId) || null
-      : null;
-    sceneState.factory.updateFocus(targetNode, sceneState.nodes, sceneState.edges || [], sceneState.activeLens || 'all');
-  }
-}
-
-export function getProceduralGlowTexture(hexColor) {
-  if (sunGlowTextureCache.has(hexColor)) return sunGlowTextureCache.get(hexColor);
-
-  const size = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  const center = size / 2;
-  const col = new THREE.Color(hexColor);
-  const r = Math.round(col.r * 255);
-  const g = Math.round(col.g * 255);
-  const b = Math.round(col.b * 255);
-
-  const grad = ctx.createRadialGradient(center, center, 0, center, center, center);
-  grad.addColorStop(0.0, 'rgba(255, 255, 255, 1.0)');
-  grad.addColorStop(0.12, `rgba(${Math.min(255, r + 75)}, ${Math.min(255, g + 75)}, ${Math.min(255, b + 75)}, 0.95)`);
-  grad.addColorStop(0.32, `rgba(${r}, ${g}, ${b}, 0.70)`);
-  grad.addColorStop(0.60, `rgba(${r}, ${g}, ${b}, 0.24)`);
-  grad.addColorStop(0.85, `rgba(${r}, ${g}, ${b}, 0.06)`);
-  grad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
-
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, size, size);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  sunGlowTextureCache.set(hexColor, texture);
-  return texture;
 }
 
 function createSolidOrbitLine(radius, colorHex, opacity = 0.55, tiltX = Math.PI / 2.0, tiltY = 0) {
@@ -141,9 +98,7 @@ export class CelestialFactory {
   constructor(scene) {
     this.scene = scene;
     this.solarMaterials = [];
-    this.genreSuns = [];
     this.focusKey = null;
-    this.glow = 1;
     this.focusHighlightGroup = new THREE.Group();
     this.scene.add(this.focusHighlightGroup);
     this.dynamicCollabMarkers = [];
@@ -151,15 +106,15 @@ export class CelestialFactory {
     this.mainArtistBeacon = null;
   }
 
-  register(node, material, baseOpacity, isUniform = false, isGlow = false) {
+  register(node, material, baseOpacity, isUniform = false) {
     node.fadeTargets = node.fadeTargets || [];
-    node.fadeTargets.push({ material, baseOpacity, isUniform, isGlow });
+    node.fadeTargets.push({ material, baseOpacity, isUniform });
   }
 
   applyFade(node) {
     const fl = node.focusLevel ?? 1;
-    node.fadeTargets?.forEach(({ material, baseOpacity, isUniform, isGlow }) => {
-      const v = baseOpacity * Math.min(1.0, fl) * (isGlow ? this.glow : 1);
+    node.fadeTargets?.forEach(({ material, baseOpacity, isUniform }) => {
+      const v = baseOpacity * Math.min(1.0, fl);
       if (isUniform && material.uniforms?.uOpacity) material.uniforms.uOpacity.value = v;
       else material.opacity = v;
     });
@@ -170,47 +125,22 @@ export class CelestialFactory {
       const vis = Boolean(node.meshGroup?.visible !== false);
       node.sphereMesh.visible = vis;
       node.sphereMesh.material.depthWrite = true;
-      if (node.glowSprite) {
-        node.glowSprite.visible = vis;
-        node.glowSprite.material.opacity = Math.max(0.45, Math.min(1.0, fl)) * 0.88;
-      }
       if (node.ring) node.ring.visible = vis;
     }
     if (node.light) node.light.intensity = SUN_LIGHT_INTENSITY * Math.max(0.45, Math.min(1.2, fl));
-  }
-
-  setGlow(level, nodes) {
-    this.glow = level;
-    nodes.forEach(n => this.applyFade(n));
   }
 
   buildGenreSun(node) {
     const group = new THREE.Group();
     group.position.copy(node.position);
 
-    // Glowing cluster center: 3D central sphere with radiant solar plasma
+    // Solid cluster center: 3D central sphere with solar plasma shading
     const shaderMat = createSolarShaderMaterial(node.color, node.energy || 0.8);
     this.solarMaterials.push(shaderMat);
     const sphereMesh = new THREE.Mesh(new THREE.SphereGeometry(node.baseRadius, 48, 48), shaderMat);
     sphereMesh.renderOrder = 0;
     sphereMesh.userData = { node };
     group.add(sphereMesh);
-
-    // Radiant additive corona halo sprite distinguishing the cluster center
-    const glowTex = getProceduralGlowTexture(node.color);
-    const glowMat = new THREE.SpriteMaterial({
-      map: glowTex,
-      color: new THREE.Color(node.color),
-      transparent: true,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      opacity: 0.88
-    });
-    const glowSprite = new THREE.Sprite(glowMat);
-    const coronaSize = node.baseRadius * 3.6;
-    glowSprite.scale.set(coronaSize, coronaSize, 1.0);
-    glowSprite.renderOrder = 1;
-    group.add(glowSprite);
 
     const ring = createSolidOrbitLine(node.baseRadius * 1.42, node.color, 0.35, Math.PI / 2.2, Math.PI / 7.0);
     group.add(ring);
@@ -221,11 +151,8 @@ export class CelestialFactory {
 
     node.meshGroup = group;
     node.sphereMesh = sphereMesh;
-    node.glowSprite = glowSprite;
-    node.nebula = null;
     node.ring = ring;
     node.shaderMaterial = shaderMat;
-    this.genreSuns.push(node);
     this.scene.add(group);
     return group;
   }
@@ -543,7 +470,6 @@ export class CelestialFactory {
     this.trackMesh = this.trackDimMesh = this.artistMesh = this.artistDimMesh = this.edgeLines = this.pulseMesh = this.artistDecor = null;
     this.trackNodes = [];
     this.artistNodes = [];
-    this.genreSuns = [];
   }
 
   buildEdgeVisuals(edges) {
@@ -659,13 +585,6 @@ export class CelestialFactory {
       this.pulseMesh.setMatrixAt(i, m);
     });
     this.pulseMesh.instanceMatrix.needsUpdate = true;
-  }
-
-  setFocusedNode(focusedNodeOrId, nodes = [], edges = [], activeLens = 'all') {
-    const activeNode = typeof focusedNodeOrId === 'string'
-      ? nodes.find(n => n.id === focusedNodeOrId) || null
-      : focusedNodeOrId;
-    this.updateFocus(activeNode, nodes, edges, activeLens);
   }
 
   updateFocus(activeNode, nodes, edges, activeLens = 'all', hoveredNode = null) {
@@ -966,26 +885,9 @@ export class CelestialFactory {
     if (edgesDirty) colors.needsUpdate = true;
   }
 
-  updateNebulae(camera, suns) {
-    for (const sun of suns) {
-      if (!sun.nebula) continue;
-      sun.nebula.visible = false;
-    }
-  }
-
   updateSolarShaders(time) {
     for (let i = 0; i < this.solarMaterials.length; i++) {
       this.solarMaterials[i].uniforms.uTime.value = time;
-    }
-    if (this.genreSuns) {
-      for (let i = 0; i < this.genreSuns.length; i++) {
-        const sun = this.genreSuns[i];
-        if (sun.glowSprite) {
-          const pulse = 1.0 + Math.sin(time * 1.6 + i * 1.4) * 0.05;
-          const s = (sun.baseRadius || 6) * 3.6 * pulse * (sun.lensScale || 1.0);
-          sun.glowSprite.scale.set(s, s, 1.0);
-        }
-      }
     }
   }
 }

@@ -1,41 +1,14 @@
 // src/config/genreTaxonomy.js
 /**
- * The OKLab/OKLCH maximally-separable cluster color palette (greedy farthest-point
- * order + 137.5° OKLCH golden-angle overflow), the "Genre Unknown" bucket, and basic
- * genre-text normalisation. No genre knowledge lives here; see src/etl/genreSignals.js.
+ * Cluster colors (137.5° golden-angle hue steps in OKLCH, gamut-clamped), the
+ * "Genre Unknown" bucket, and basic genre-text normalisation. No genre knowledge lives here; see src/etl/genreSignals.js.
  *
  * Imported by both the backend and browser, so it must stay free of browser APIs.
  */
 
-function srgbToLinear(c) {
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-}
-
 function linearToSrgb(c) {
   const clamped = Math.max(0, Math.min(1, c));
   return clamped <= 0.0031308 ? 12.92 * clamped : 1.055 * Math.pow(clamped, 1 / 2.4) - 0.055;
-}
-
-export function hexToOklab(hex) {
-  const clean = String(hex).replace('#', '');
-  const v = parseInt(clean, 16);
-  const r = srgbToLinear(((v >> 16) & 255) / 255);
-  const g = srgbToLinear(((v >> 8) & 255) / 255);
-  const b = srgbToLinear((v & 255) / 255);
-
-  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
-  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
-  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
-
-  return {
-    L: 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
-    a: 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
-    b: 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
-  };
-}
-
-function oklabDist(c1, c2) {
-  return Math.hypot(c1.L - c2.L, c1.a - c2.a, c1.b - c2.b);
 }
 
 /**
@@ -98,9 +71,6 @@ export function getDistinctClusterColor(index) {
   const chroma = 0.165 - (index % 2) * 0.015;
   return oklchToHex(lightness, chroma, hue);
 }
-
-export const ORDERED_CLUSTER_COLORS = Array.from({ length: 32 }, (_, i) => getDistinctClusterColor(i));
-export const CLUSTER_COLORS = ORDERED_CLUSTER_COLORS;
 
 export const UNCLASSIFIED_FAMILY = { id: 'unclassified', label: 'Genre Unknown', color: '#6E768C' };
 

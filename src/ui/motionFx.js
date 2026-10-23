@@ -4,23 +4,12 @@
  * Provides spring physics, tactile micro-interactions, fluid view transitions,
  * and staggered reveal animations with full prefers-reduced-motion support.
  */
-import { animate, spring, press, stagger } from 'motion';
+import { animate, press, stagger } from 'motion';
 
 export const isReducedMotion = () => {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
 };
 
-/**
- * Standard spring easing presets.
- * visualDuration: duration in seconds
- * bounce: spring overshoot factor [0..1]
- */
-export const SPRINGS = {
-  snappy: (delay = 0) => ({ ease: spring(0.28, 0.15), delay, duration: 0.32 }),
-  gentle: (delay = 0) => ({ ease: spring(0.42, 0.12), delay, duration: 0.45 }),
-  bouncy: (delay = 0) => ({ ease: spring(0.35, 0.3), delay, duration: 0.4 }),
-  dialog: () => ({ ease: spring(0.38, 0.18), duration: 0.4 })
-};
 
 /**
  * Smoothly animates an element's appearance using spring physics.
@@ -40,8 +29,7 @@ export function springIn(element, { y = 10, scale = 0.98, opacity = 0, visualDur
       transform: [`translateY(${y}px) scale(${scale})`, 'translateY(0px) scale(1)']
     },
     {
-      ease: spring(visualDuration, bounce),
-      duration: visualDuration + 0.1,
+      type: 'spring', visualDuration, bounce,
       delay
     }
   );
@@ -60,8 +48,7 @@ export function animateDialogIn(dialogEl) {
       filter: ['blur(6px)', 'blur(0px)']
     },
     {
-      ease: spring(0.36, 0.18),
-      duration: 0.4
+      type: 'spring', visualDuration: 0.36, bounce: 0.18
     }
   );
 }
@@ -121,7 +108,7 @@ export function transitionViews(leavingView, enteringView, direction = 'forward'
   animate(
     enteringView,
     { opacity: [0, 1], transform: [`translateX(${offset}px)`, 'translateX(0px)'] },
-    { ease: spring(0.34, 0.12), duration: 0.36, delay: 0.04 }
+    { type: 'spring', visualDuration: 0.34, bounce: 0.12, delay: 0.04 }
   );
 }
 
@@ -146,8 +133,7 @@ export function staggerRevealItems(container, itemSelector = 'li', { limit = 24,
     },
     {
       delay: stagger(staggerDelay, { startDelay: 0.02 }),
-      ease: spring(0.32, 0.14),
-      duration: 0.35
+      type: 'spring', visualDuration: 0.32, bounce: 0.14
     }
   );
 }
@@ -172,8 +158,7 @@ export function animateSparkbars(chartEl) {
     },
     {
       delay: stagger(0.035, { startDelay: 0.06 }),
-      ease: spring(0.4, 0.2),
-      duration: 0.45
+      type: 'spring', visualDuration: 0.4, bounce: 0.2
     }
   );
 }
@@ -187,7 +172,7 @@ export function attachPressFeedback(target, { scale = 0.96 } = {}) {
     press(target, (element) => {
       animate(element, { transform: `scale(${scale})` }, { duration: 0.09, ease: 'ease-out' });
       return () => {
-        animate(element, { transform: 'scale(1)' }, { ease: spring(0.3, 0.22), duration: 0.32 });
+        animate(element, { transform: 'scale(1)' }, { type: 'spring', visualDuration: 0.3, bounce: 0.22 });
       };
     });
   } catch (err) {

@@ -37,26 +37,6 @@ export function isFreshClientMeta(m) {
 export const cleanMetaList = (list, max) =>
   Array.isArray(list) ? list.filter(x => typeof x === 'string' && x.length < 60).slice(0, max) : [];
 
-function hashUnit(str, salt) {
-  let h = 2166136261;
-  const s = `${salt}:${str}`;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0) / 4294967295;
-}
-
-export function estimatedFeatures(id) {
-  return {
-    energy: Number((0.45 + hashUnit(id, 'energy') * 0.5).toFixed(2)),
-    valence: Number((0.3 + hashUnit(id, 'valence') * 0.6).toFixed(2)),
-    acoustic: Number((0.05 + hashUnit(id, 'acoustic') * 0.5).toFixed(2)),
-    dance: Number((0.4 + hashUnit(id, 'dance') * 0.5).toFixed(2)),
-    bpm: Math.round(90 + hashUnit(id, 'bpm') * 60)
-  };
-}
-
 /**
  * Artists you play alongside each other: songs liked close together (same few days),
  * plays in the same listening session, plus multi-year streaming history sessions.
@@ -500,7 +480,6 @@ export function assembleUniverseFromSignals(
       // Tags Last.fm gave this name that don't fit what you play it with (likely a namesake).
       doubtedTags: doubtedGenres.has(a.id) ? artistGenres.get(a.id).slice(0, 3).map(titleCase) : undefined,
       basePlays: Math.max(10, Math.round(artistScore.get(a.id) || 10)),
-      ...estimatedFeatures(a.id),
       ranks: artistRanks.get(a.id) || {},
       history: hist,
       fromSpotifyApi,
@@ -529,7 +508,6 @@ export function assembleUniverseFromSignals(
         featArtistId: featIds[0] || null,
         featArtistIds: featIds,
         basePlays: Math.max(1, Math.round(trackScore.get(t.id))),
-        ...estimatedFeatures(t.id),
         ranks: src.ranks,
         liked: src.liked,
         recentPlays: src.recentPlays,
@@ -601,8 +579,7 @@ export function assembleUniverseFromSignals(
         peakYear,
         pastFavCount,
         dormantCount
-      } : null,
-      ...estimatedFeatures(c.id)
+      } : null
     };
   });
 

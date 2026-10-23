@@ -96,6 +96,8 @@ export async function clearStoredHistory() {
  *  - Raw Spotify Extended Streaming History (`Streaming_History_Audio_*.json`, `endsong_*.json`)
  *  - Standard Spotify Account Data (`StreamingHistory_music_*.json`, `StreamingHistory*.json`)
  */
+const listNames = (names) => (names.length > 2 ? `${names.slice(0, 2).join(', ')} and ${names.length - 2} more` : names.join(' and '));
+
 export async function parseImportedFiles(fileList) {
   const files = Array.from(fileList || []).filter(f => f && f.name.toLowerCase().endsWith('.json') && !f.name.toLowerCase().includes('video'));
   if (!files.length) {
@@ -104,6 +106,8 @@ export async function parseImportedFiles(fileList) {
 
   const rawEvents = [];
   const loadedFileNames = [];
+  const unreadable = [];
+  const empty = [];
 
   for (const file of files) {
     let parsed;
@@ -111,6 +115,7 @@ export async function parseImportedFiles(fileList) {
       const text = await file.text();
       parsed = JSON.parse(text);
     } catch {
+      unreadable.push(file.name);
       continue;
     }
 
@@ -136,14 +141,20 @@ export async function parseImportedFiles(fileList) {
     }
 
     // 3. Raw array of Spotify streaming history events
-    if (Array.isArray(parsed)) {
+    if (Array.isArray(parsed) && parsed.length) {
       for (let i = 0; i < parsed.length; i++) rawEvents.push(parsed[i]);
       loadedFileNames.push(file.name);
+    } else {
+      empty.push(file.name);
     }
   }
 
   if (!rawEvents.length) {
-    throw new Error('Could not find valid Spotify streaming events or an Astra snapshot in the selected JSON files.');
+    const reasons = [
+      unreadable.length && `${listNames(unreadable)} ${unreadable.length === 1 ? 'isn’t' : 'aren’t'} valid JSON`,
+      empty.length && `${listNames(empty)} ${empty.length === 1 ? 'has' : 'have'} no listening events`
+    ].filter(Boolean);
+    throw new Error(`Couldn’t import: ${reasons.join('; ')}. Choose the Streaming_History_Audio files from your Spotify data export.`);
   }
 
   const historySummary = parseStreamingEvents(rawEvents);
@@ -151,7 +162,7 @@ export async function parseImportedFiles(fileList) {
   historySummary.fileNames = loadedFileNames;
 
   if (historySummary.validPlays === 0) {
-    throw new Error('No plays of 30 seconds or longer were found in the selected files.');
+    throw new Error(`No plays of 30 seconds or longer in ${listNames(loadedFileNames)}. Is this a Spotify streaming history file?`);
   }
 
   return {

@@ -16,9 +16,7 @@
  * names. When no unused name is left, the cluster is reported as `duplicateOf` the
  * cluster holding its best name, and clustering merges the two.
  */
-import { UNCLASSIFIED_FAMILY, getDistinctClusterColor, CLUSTER_COLORS } from '../src/config/genreTaxonomy.js';
-
-export { CLUSTER_COLORS };
+import { UNCLASSIFIED_FAMILY, getDistinctClusterColor } from '../src/config/genreTaxonomy.js';
 
 // Longer names crowd the 3D labels; shorter candidates win when available.
 const MAX_NAME_LENGTH = 28;

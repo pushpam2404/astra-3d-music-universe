@@ -25,22 +25,4 @@ export const LAYOUT_CONFIG = {
   moonInclinationRange: 1.4
 };
 
-export const GENRE_PALETTES = {
-  'Synthwave & Cyberpunk': '#D87A9E',
-  'Ambient & Electronic': '#5DB5B0',
-  'Neo-Psychedelia': '#A582C8',
-  'Indie Rock & Bedroom Pop': '#E2B86B',
-  'Lo-Fi Hip Hop & Beats': '#82B8A0',
-  'Drum & Bass / Bass Music': '#C96567',
-  'Post-Punk & Darkwave': '#8C7BB8',
-  'Modern Jazz & Fusion': '#64A8A0',
-  'Progressive House': '#6E98C8',
-  'Alt-R&B & Neo-Soul': '#D98A5B',
-  'Industrial & EBM': '#C26D6D',
-  'default': '#82B8A0'
-};
-
 export const COLOR_SPOTIFY_GREEN = '#1DB954';
-export const COLOR_LAGRANGE_GOLD = '#E2B86B';
-export const COLOR_USER_A_CYAN = '#5DB5B0';
-export const COLOR_USER_B_MAGENTA = '#D87A9E';
