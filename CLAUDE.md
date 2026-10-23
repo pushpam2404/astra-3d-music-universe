@@ -78,6 +78,8 @@ Any AI agent modifying Astra **must** preserve these invariants:
 * **Synchronized Cluster Explorer (`src/ui/detailPanel.js`)**:
   * Clicking an inline memory/era filter pill inside the Cluster detail panel invokes `onSetLens(f.id)` so the 3D canvas, top lens bar, and side-panel list always stay in sync.
 * **Data-driven lenses (`src/config/lenses.js`)**: the lens bar, cluster filters and artist song filters all come from `availableLenses(nodes)`: the four memory lenses plus one `era_YYYY` / `early_YYYY` lens per year present in the history (years up to 2022 share `era_2020_2022`). Never hardcode years; a lens that matches nothing is not shown.
+* **Time-lapse (`Hud.toggleReplay`)**: "Replay years" steps through `year_YYYY` lenses (anything played that calendar year, `nodeMatchesLens`), so it reuses lens culling; the caption shows the year and artist count. `year_` lenses never go in the URL, and the map doesn't refine mid-replay.
+* **Visible refining (`src/main.js` → `startMorph`, `showTrails`)**: when the map refines, each old cluster's successor is the new cluster most of its artists landed in; artists that went elsewhere get a fading trail (up to `MAX_TRAILS`) and the notice names how many moved.
 * **URL state (`src/main.js` → `writeUrl` / `applyUrl`)**: the selected node and active lens live in `?node=&lens=`, so Back/Forward step through views and links reopen them. Unknown ids in a link are ignored and dropped from the URL.
 
 ### 3.7 3D Planet Collision Clearance

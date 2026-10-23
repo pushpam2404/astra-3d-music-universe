@@ -42,9 +42,12 @@ const AppState = {
 const ENRICH_BATCH = 40;
 // Auto-refine once this many artists (or this share of the pending ones) have new
 // genres, after this long without interaction.
-const AUTO_REFINE_MIN = 60;
-const AUTO_REFINE_SHARE = 0.15;
-const AUTO_REFINE_IDLE_MS = 8000;
+const AUTO_REFINE_MIN = 30;
+const AUTO_REFINE_SHARE = 0.1;
+const AUTO_REFINE_IDLE_MS = 4000;
+const MORPH_SECONDS = 2.4;
+const TRAIL_FADE_MS = 2500;
+const MAX_TRAILS = 400;
 const plural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString()} ${n === 1 ? one : many}`;
 
 async function initApp() {
@@ -108,7 +111,8 @@ async function initApp() {
     if (restoringUrl) return;
     const params = new URLSearchParams();
     if (AppState.selectedNode) params.set('node', AppState.selectedNode.id);
-    if (AppState.activeLens !== 'all') params.set('lens', AppState.activeLens);
+    // Time-lapse years are a playback, not a place to link to.
+    if (AppState.activeLens !== 'all' && !AppState.activeLens.startsWith('year_')) params.set('lens', AppState.activeLens);
     const next = params.toString() ? `?${params}` : '';
     if (next !== window.location.search) window.history[replace ? 'replaceState' : 'pushState'](null, '', next || window.location.pathname);
   }
@@ -208,6 +212,11 @@ async function initApp() {
       if (AppState.selectedNode) detailPanel.render(AppState.selectedNode);
     },
     onSheetChange: () => updateViewOffset(),
+    onReplayYear: (year) => {
+      if (!year) return updateUniverseCaption(AppState.rawDataset);
+      const played = AppState.nodes.filter(n => n.type === 'artist' && (n.history?.byYear?.[year] || 0) > 0).length;
+      hud.setCaption(year, `${plural(played, 'artist')} played this year`);
+    },
     onOrbitSpeed: (speed) => {
       layout.orbitMultiplier = speed;
       controls.autoRotate = speed > 0;
@@ -430,7 +439,11 @@ async function initApp() {
    */
   function loadDataset(rawDataset, { morph = false } = {}) {
     const previous = new Map();
-    if (morph) AppState.nodes.forEach(n => { if (n.type !== 'track' && n.position) previous.set(n.id, n.position.clone()); });
+    const previousCluster = new Map();
+    if (morph) AppState.nodes.forEach(n => {
+      if (n.type !== 'track' && n.position) previous.set(n.id, n.position.clone());
+      if (n.type === 'artist') previousCluster.set(n.id, AppState.nodeMap.get(n.primarySunId)?.name);
+    });
     AppState.rawDataset = rawDataset;
     AppState.nodes.forEach(n => { if (n.meshGroup?.isObject3D) scene.remove(n.meshGroup); });
     if (edgeGroup) scene.remove(edgeGroup);
@@ -446,7 +459,11 @@ async function initApp() {
 
     layout.initializeNodePositions(AppState.nodes);
     cameraController.setSceneRadius(layout.boundingRadius);
-    if (morph) startMorph(previous);
+    if (morph) startMorph(previous, previousCluster);
+    else {
+      lastMoves = [];
+      showTrails([]);
+    }
 
     AppState.nodes.forEach(node => { if (node.type === 'genre') factory.buildGenreSun(node); });
     factory.buildArtistPlanets(AppState.nodes.filter(n => n.type === 'artist'));
@@ -538,6 +555,7 @@ async function initApp() {
       } else {
         hud.setNotice(null);
       }
+      if (morph && lastMoves.length) hud.setNotice(describeMoves(lastMoves));
 
       if (diagnostics.pendingArtists?.length) {
         enrichInBackground(diagnostics.pendingArtists);
@@ -564,7 +582,8 @@ async function initApp() {
   // where its artists were.
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   let morphAnimation = null;
-  function startMorph(previous) {
+  let lastMoves = [];
+  function startMorph(previous, previousCluster) {
     const v = new THREE.Vector3();
     AppState.nodes.forEach(n => {
       if (n.type === 'artist') n.morphFrom = previous.get(n.id) || null;
@@ -579,13 +598,77 @@ async function initApp() {
       });
       n.morphFrom = count ? v.clone().divideScalar(count) : null;
     });
+    // Artists that left their group get a trail and a mention in the notice. Clusters get
+    // renamed between maps, so each old cluster's successor is the new cluster most of
+    // its artists landed in; only artists that went somewhere else count as moved.
+    const clusterName = (n) => AppState.nodeMap.get(n.primarySunId)?.name;
+    const landed = new Map();
+    AppState.nodes.forEach(n => {
+      const from = n.type === 'artist' && previousCluster.get(n.id);
+      if (!from) return;
+      const counts = landed.get(from) || new Map();
+      counts.set(clusterName(n), (counts.get(clusterName(n)) || 0) + 1);
+      landed.set(from, counts);
+    });
+    const successor = new Map([...landed].map(([from, counts]) => [from, [...counts].sort((a, b) => b[1] - a[1])[0][0]]));
+    lastMoves = AppState.nodes
+      .filter(n => n.type === 'artist' && n.morphFrom && previousCluster.get(n.id) && successor.get(previousCluster.get(n.id)) !== clusterName(n))
+      .sort((a, b) => (b.history?.plays || b.basePlays || 0) - (a.history?.plays || a.basePlays || 0));
     morphAnimation?.stop();
     if (reduceMotion.matches) { layout.morphT = 1; return; }
+    showTrails(lastMoves.slice(0, MAX_TRAILS));
     layout.morphT = 0;
     morphAnimation = motionAnimate(0, 1, {
-      type: 'spring', visualDuration: 1.4, bounce: 0,
+      type: 'spring', visualDuration: MORPH_SECONDS, bounce: 0,
       onUpdate: (t) => { layout.morphT = t; }
     });
+  }
+
+  const describeMoves = (moves) => {
+    const top = moves[0];
+    return `${plural(moves.length, 'artist')} moved to a new cluster, like ${top.name} → ${AppState.nodeMap.get(top.primarySunId)?.name}.`;
+  };
+
+  // One line per moving artist, from where it was to where it is now: bright at the
+  // artist, dim at the old spot. Fades once the glide settles.
+  let trails = null;
+  function showTrails(movers) {
+    if (trails) {
+      scene.remove(trails);
+      trails.geometry.dispose();
+      trails.material.dispose();
+      trails = null;
+    }
+    if (!movers.length) return;
+    const positions = new Float32Array(movers.length * 6);
+    const colors = new Float32Array(movers.length * 6);
+    const color = new THREE.Color();
+    movers.forEach((n, i) => {
+      n.morphFrom.toArray(positions, i * 6);
+      n.morphFrom.toArray(positions, i * 6 + 3);
+      color.set(AppState.nodeMap.get(n.primarySunId)?.color || n.color);
+      color.toArray(colors, i * 6 + 3);
+      color.multiplyScalar(0.15).toArray(colors, i * 6);
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    trails = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false }));
+    trails.userData = { movers, fadeStart: null };
+    scene.add(trails);
+  }
+
+  function updateTrails(now) {
+    if (!trails) return;
+    const { movers } = trails.userData;
+    const pos = trails.geometry.attributes.position;
+    movers.forEach((n, i) => pos.setXYZ(i * 2 + 1, n.position.x, n.position.y, n.position.z));
+    pos.needsUpdate = true;
+    if (layout.morphT < 1) return;
+    trails.userData.fadeStart ??= now;
+    const left = 1 - (now - trails.userData.fadeStart) / TRAIL_FADE_MS;
+    if (left <= 0) showTrails([]);
+    else trails.material.opacity = 0.9 * left;
   }
 
   // The map refines itself as genres arrive, but only while you aren't exploring:
@@ -593,7 +676,7 @@ async function initApp() {
   let lastInteraction = performance.now();
   ['pointerdown', 'wheel', 'keydown', 'touchstart'].forEach(type =>
     window.addEventListener(type, () => { lastInteraction = performance.now(); }, { passive: true }));
-  const isIdle = () => !AppState.selectedNode && document.visibilityState === 'visible' &&
+  const isIdle = () => !AppState.selectedNode && !hud.replayTimer && document.visibilityState === 'visible' &&
     performance.now() - lastInteraction > AUTO_REFINE_IDLE_MS;
 
   let enrichRun = 0;
@@ -680,6 +763,7 @@ async function initApp() {
 
     easeViewOffset();
     layout.step(AppState.nodes, delta);
+    updateTrails(now);
     factory.updateArtistInstances(AppState.hoveredNode);
     factory.updateTrackInstances(AppState.hoveredNode);
     factory.updateEdgeGeometry(AppState.edges);

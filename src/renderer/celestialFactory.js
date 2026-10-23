@@ -36,6 +36,8 @@ export function nodeMatchesLens(node, lens) {
     return false;
   }
   if (!h) return false;
+  // Time-lapse: anything played at all in that calendar year.
+  if (lens.startsWith('year_')) return (h.byYear?.[lens.slice(5)] || 0) > 0;
   if (h.status === lens) return true;
   if (Array.isArray(h.tags) && h.tags.includes(lens)) return true;
   return false;

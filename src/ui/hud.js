@@ -21,6 +21,7 @@ import {
 const KIND_LABEL = { genre: 'Cluster', artist: 'Artist', track: 'Song' };
 const KIND_ORDER = { genre: 0, artist: 1, track: 2 };
 const MAX_RESULTS = 14;
+const REPLAY_STEP_MS = 2400;
 
 const $ = (id) => document.getElementById(id);
 
@@ -220,8 +221,10 @@ export class Hud {
   initLensBar() {
     const bar = $('lens-bar');
     bar.addEventListener('click', (e) => {
+      if (e.target.closest?.('[data-replay]')) return this.toggleReplay();
       const btn = e.target.closest?.('.lens-pill');
       if (!btn) return;
+      if (this.replayTimer) this.stopReplay({ resetLens: false });
       this.setLens(btn.dataset.lens || 'all');
     });
   }
@@ -271,10 +274,47 @@ export class Hud {
       divider.setAttribute('aria-hidden', 'true');
       pills.splice(firstEra + 1, 0, divider);
     }
+    const years = Object.keys(this.state.rawDataset?.historyMeta?.years || {});
+    if (enabled && years.length > 1) {
+      const replay = Object.assign(document.createElement('button'), { type: 'button', className: 'lens-pill lens-replay', textContent: this.replayTimer ? '■ Stop' : '▶ Replay years' });
+      replay.dataset.replay = '';
+      pills.unshift(replay); // first, so it never scrolls out of view behind the panel
+    }
     scroll.replaceChildren(...pills);
     $('lens-bar').hidden = !lenses.length;
     if (this.state.activeLens !== 'all' && !lenses.some(l => l.id === this.state.activeLens)) this.state.activeLens = 'all';
     scroll.querySelectorAll('.lens-pill').forEach(btn => btn.classList.toggle('is-active', btn.dataset.lens === this.state.activeLens));
+  }
+
+  /* ---------- Time-lapse: replay the history one year at a time ---------- */
+
+  toggleReplay() {
+    if (this.replayTimer) return this.stopReplay();
+    const years = Object.keys(this.state.rawDataset?.historyMeta?.years || {}).sort();
+    let i = 0;
+    const next = () => {
+      if (i === years.length) return this.stopReplay();
+      this.setLens(`year_${years[i]}`);
+      this.cb.onReplayYear?.(years[i]);
+      i++;
+      this.replayTimer = setTimeout(next, REPLAY_STEP_MS);
+    };
+    this.replayTimer = -1; // set before the first step so the button reads "Stop"
+    next();
+    this.syncReplayButton();
+  }
+
+  stopReplay({ resetLens = true } = {}) {
+    clearTimeout(this.replayTimer);
+    this.replayTimer = null;
+    this.cb.onReplayYear?.(null);
+    if (resetLens) this.setLens('all');
+    this.syncReplayButton();
+  }
+
+  syncReplayButton() {
+    const btn = document.querySelector('#lens-bar [data-replay]');
+    if (btn) btn.textContent = this.replayTimer ? '■ Stop' : '▶ Replay years';
   }
 
   /* ---------- View settings ---------- */

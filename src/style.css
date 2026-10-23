@@ -553,6 +553,12 @@ input {
   box-shadow: 0 2px 12px rgba(244, 233, 200, 0.35);
 }
 
+.lens-replay {
+  margin-right: 4px;
+  color: var(--starlight);
+  border-color: var(--line-highlight);
+}
+
 .lens-divider {
   width: 1px;
   height: 16px;

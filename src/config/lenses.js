@@ -37,5 +37,6 @@ export function lensDescription(id) {
   if (!id || id === 'all') return null;
   const memory = MEMORY_LENSES.find(l => l.id === id);
   if (memory) return memory.desc;
+  if (id.startsWith('year_')) return `${id.slice(5)} — everything you played that year.`;
   return ERA_TAG.test(id) ? eraLens(id).desc : null;
 }
