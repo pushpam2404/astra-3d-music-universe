@@ -40,10 +40,9 @@ const AppState = {
 };
 
 const ENRICH_BATCH = 40;
-// Auto-refine once this many artists (or this share of the pending ones) have new
-// genres, after this long without interaction.
-const AUTO_REFINE_MIN = 30;
-const AUTO_REFINE_SHARE = 0.1;
+// Auto-refine every time this many artists get new genres (and once more when the
+// lookups finish), after this long without interaction.
+const AUTO_REFINE_EVERY = 200;
 const AUTO_REFINE_IDLE_MS = 4000;
 const MORPH_SECONDS = 2.4;
 const TRAIL_FADE_MS = 2500;
@@ -690,7 +689,6 @@ async function initApp() {
       hud.updateEnrichmentStatus({ waitingCount: 0, readyOnReloadCount: 0 });
       await loadLive({ skipInitialEnrich: true, refine: true });
     };
-    const refineThreshold = Math.max(AUTO_REFINE_MIN, Math.round(unenrichedArtists.length * AUTO_REFINE_SHARE));
 
     hud.updateEnrichmentStatus({
       waitingCount: waitingToFetchCount,
@@ -720,7 +718,7 @@ async function initApp() {
 
         waitingToFetchCount = Math.max(0, unenrichedArtists.length - (i + batch.length));
         const finished = waitingToFetchCount === 0;
-        if (newlyResolvedForReloadCount > 0 && (finished || newlyResolvedForReloadCount >= refineThreshold) && isIdle()) {
+        if (newlyResolvedForReloadCount > 0 && (finished || newlyResolvedForReloadCount >= AUTO_REFINE_EVERY) && isIdle()) {
           // The refined map starts its own lookup loop for whatever is still pending.
           applyResolvedNow();
           return;
