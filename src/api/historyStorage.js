@@ -4,6 +4,7 @@
  * and compiled Astra Universe snapshots.
  */
 import { parseStreamingEvents } from '../etl/historyParser.js';
+import { isZipFile, extractZipEntries } from './zipReader.js';
 
 const DB_NAME = 'astra_history_db';
 const STORE_NAME = 'kv';
@@ -98,10 +99,17 @@ export async function clearStoredHistory() {
  */
 const listNames = (names) => (names.length > 2 ? `${names.slice(0, 2).join(', ')} and ${names.length - 2} more` : names.join(' and '));
 
+const isAudioJson = (name) => name.toLowerCase().endsWith('.json') && !name.toLowerCase().includes('video');
+
 export async function parseImportedFiles(fileList) {
-  const files = Array.from(fileList || []).filter(f => f && f.name.toLowerCase().endsWith('.json') && !f.name.toLowerCase().includes('video'));
+  const picked = Array.from(fileList || []).filter(Boolean);
+  const files = [];
+  for (const f of picked) {
+    if (isZipFile(f)) files.push(...await extractZipEntries(f, isAudioJson));
+    else if (isAudioJson(f.name)) files.push(f);
+  }
   if (!files.length) {
-    throw new Error('No audio JSON files found in your selection. Choose your Spotify Streaming History folder or JSON files.');
+    throw new Error('No audio JSON files found in your selection. Choose your Spotify data zip, the unzipped Streaming History folder, or its JSON files.');
   }
 
   const rawEvents = [];

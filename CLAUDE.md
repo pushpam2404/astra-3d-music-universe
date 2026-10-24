@@ -24,7 +24,7 @@ npm install
 npm run dev         # Express + Vite middleware (restarts on server/ changes)
 npm run dev:client  # Frontend-only Vite server
 npm run build       # Production Vite bundle -> dist/
-npm start           # NODE_ENV=production: Express serves dist/ + /api
+npm start           # production (--production flag, works on Windows): Express serves dist/ + /api
 ```
 
 * **Running Server Preservation**: If a local server is already running (e.g., on port `5180` or `5173`) and serving `dist/` or Vite middleware, **do not kill or restart the server** unless explicitly asked—run `npx vite build` (`./node_modules/.bin/vite build`) so the user can simply refresh without losing background enrichment progress.
@@ -108,7 +108,7 @@ Any AI agent modifying Astra **must** preserve these invariants:
 
 1. **Ingestion & Storage**:
    * **Spotify OAuth**: `/api/auth/login` → `/api/auth/callback` sets the encrypted `astra_session` cookie. `src/api/backendClient.js` fetches live signals (`signalsOnly: true`) and caches them in `localStorage` for 6 hours.
-   * **Extended Streaming History**: Users import `Streaming_History_Audio_*.json` / `StreamingHistory_music_*.json` or `.json` snapshots via the **History** modal (`src/ui/hud.js`). `src/api/historyStorage.js` parses events via `parseStreamingEvents` (`src/etl/historyParser.js`) and persists `historySummary` in IndexedDB (`astra_history_db`).
+   * **Extended Streaming History**: Users import `Streaming_History_Audio_*.json` / `StreamingHistory_music_*.json`, `.json` snapshots, or Spotify's export `.zip` as-is via the **History** modal (`src/ui/hud.js`). Zips are read in the browser by `src/api/zipReader.js` (native `DecompressionStream`), because Windows doesn't auto-unzip downloads like Safari; dropped folders are walked with `webkitGetAsEntry`. `src/api/historyStorage.js` parses events via `parseStreamingEvents` (`src/etl/historyParser.js`) and persists `historySummary` in IndexedDB (`astra_history_db`).
    * **Local Folder Auto-Detection**: `server/historyLoader.js` also detects a local `Spotify Extended Streaming History/` directory when running locally.
 2. **Universe Assembly & Clustering (`src/etl/universeAssembler.js` + `server/clustering.js`)**:
    * `mergeSignalsAndRank` merges Spotify top charts, recent plays, Liked Songs, and `historySummary`, deduplicating tracks by normalized primary artist + cleaned track title and extracting featured collaborators.

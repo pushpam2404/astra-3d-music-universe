@@ -19,7 +19,8 @@ export const config = {
   port,
   // Spotify only allows plain-http redirects for an explicit loopback IP, never "localhost".
   host: process.env.HOST || '127.0.0.1',
-  isProd: process.env.NODE_ENV === 'production',
+  // `--production` because Windows shells can't set NODE_ENV inline in the npm script.
+  isProd: process.env.NODE_ENV === 'production' || process.argv.includes('--production'),
   clientId: process.env.SPOTIFY_CLIENT_ID || '',
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
   // Optional override; otherwise derived from the incoming request (see getRedirectUri).

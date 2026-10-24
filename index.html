@@ -188,15 +188,15 @@
     <div class="modal-section">
       <h3>Import</h3>
       <div id="history-dropzone" class="history-dropzone">
-        <p class="dropzone-title">Drop your Spotify History folder or <code>.json</code> files here</p>
+        <p class="dropzone-title">Drop your Spotify data <code>.zip</code>, History folder or <code>.json</code> files here</p>
         <p class="dropzone-sub"><code>Streaming_History_Audio_*.json</code>, <code>StreamingHistory_music_*.json</code>, or an <code>astra-universe-*.json</code> snapshot</p>
         <div class="dropzone-actions">
           <button type="button" id="import-folder-btn" class="btn btn-starlight">Choose History Folder</button>
-          <button type="button" id="import-files-btn" class="btn">Choose JSON Files</button>
+          <button type="button" id="import-files-btn" class="btn">Choose Zip or JSON Files</button>
           <button type="button" id="use-local-history-btn" class="btn" hidden>Sync Local Folder</button>
         </div>
         <input type="file" id="history-folder-input" webkitdirectory directory multiple hidden>
-        <input type="file" id="history-files-input" accept=".json,application/json" multiple hidden>
+        <input type="file" id="history-files-input" accept=".json,.zip,application/json,application/zip" multiple hidden>
       </div>
       <p id="history-feedback" class="history-feedback" hidden></p>
     </div>

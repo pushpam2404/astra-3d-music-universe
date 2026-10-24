@@ -865,8 +865,30 @@ export class Hud {
         dropzone.classList.remove('is-dragover');
       });
     });
-    dropzone.addEventListener('drop', (e) => {
-      if (e.dataTransfer?.files?.length) handleFiles(e.dataTransfer.files);
+    // A dropped folder arrives as one entry, not its files, so walk directories ourselves.
+    const readEntry = (entry) => new Promise((resolve) => {
+      if (entry.isFile) return entry.file((f) => resolve([f]), () => resolve([]));
+      const reader = entry.createReader();
+      const all = [];
+      const next = () => reader.readEntries(async (batch) => {
+        if (!batch.length) {
+          const nested = await Promise.all(all.map(readEntry));
+          return resolve(nested.flat());
+        }
+        all.push(...batch);
+        next();
+      }, () => resolve([]));
+      next();
+    });
+    dropzone.addEventListener('drop', async (e) => {
+      const dt = e.dataTransfer;
+      // Entries must be taken synchronously; the DataTransfer is emptied after the first await.
+      const entries = Array.from(dt?.items || []).map(item => item.webkitGetAsEntry?.()).filter(Boolean);
+      if (entries.some(en => en.isDirectory)) {
+        handleFiles((await Promise.all(entries.map(readEntry))).flat());
+      } else if (dt?.files?.length) {
+        handleFiles(dt.files);
+      }
     });
 
     exportJsonBtn.addEventListener('click', () => this.cb.onExportJson?.());

@@ -10,7 +10,7 @@
     "dev": "node --watch-path=./server server/index.js",
     "dev:client": "vite",
     "build": "vite build",
-    "start": "NODE_ENV=production node server/index.js",
+    "start": "node server/index.js --production",
     "preview": "vite preview"
   },
   "keywords": [],
