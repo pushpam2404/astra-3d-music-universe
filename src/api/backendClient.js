@@ -6,7 +6,6 @@
  * never hit serverless request/response limits (HTTP 413 on Vercel) and reloads read
  * from the 6-hour local Spotify signal cache (0 repeat Spotify API calls).
  */
-import { mergeSignalsAndRank, assembleUniverseFromSignals } from '../etl/universeAssembler.js';
 
 export const SPOTIFY_LOGIN_URL = '/api/auth/login';
 
@@ -139,6 +138,8 @@ async function buildBrowserHistoryUniverse(
     forceSpotifyRefresh = false
   } = {}
 ) {
+  // Clustering pulls in UMAP and Louvain, which the first screen does not need.
+  const { mergeSignalsAndRank, assembleUniverseFromSignals } = await import('../etl/universeAssembler.js');
   const diagnostics = { warnings: [], clientBuilt: true };
   let liveSignals = {
     topArtistsByRange: [[], [], []],
@@ -198,7 +199,10 @@ async function buildBrowserHistoryUniverse(
         const batch = batches[idx] || [];
         const map = r?.artistMeta || {};
         for (const a of batch) {
-          const entry = map[a.id] || { g: [], c: [], t: Date.now() };
+          // Artists missing from the reply were not finished (out of time); leave them pending
+          // so a later pass retries them rather than remembering a blank.
+          const entry = map[a.id];
+          if (!entry) continue;
           newlyEnrichedMeta[a.id] = entry;
           mergedKnown[a.id] = entry;
         }
