@@ -8,6 +8,7 @@
 import { SPOTIFY_LOGIN_URL, logout } from '../api/backendClient.js';
 import { nodeMatchesLens } from '../renderer/celestialFactory.js';
 import { itemMetaLabel } from './detailPanel.js';
+import { escapeHtml as esc } from './escapeHtml.js';
 import { availableLenses, lensDescription } from '../config/lenses.js';
 import {
   springIn,
@@ -359,12 +360,20 @@ export class Hud {
         const saved = localStorage.getItem(`astra_${id}`);
         if (saved !== null) input.value = saved;
       } catch { /* storage unavailable */ }
-      const apply = () => {
+      // Start the orbit slider paused for people who asked their system for less motion.
+      if (id === 'orbit-speed-slider' && input.value === input.defaultValue &&
+          window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        try { if (localStorage.getItem(`astra_${id}`) === null) input.value = '0'; } catch { input.value = '0'; }
+      }
+      // Only a move of the slider is stored, so the reduced-motion default above never sticks.
+      const apply = (event) => {
         const v = Number(input.value);
         const lbl = $(label);
         if (lbl) lbl.textContent = format(v);
         onChange(v);
-        try { localStorage.setItem(`astra_${id}`, input.value); } catch { /* ignore */ }
+        if (event?.type === 'input') {
+          try { localStorage.setItem(`astra_${id}`, input.value); } catch { /* ignore */ }
+        }
       };
       input.addEventListener('input', apply);
       this.applyInitialSettings.push(apply);
@@ -943,17 +952,17 @@ export class Hud {
       box.innerHTML = `
         <div class="status-pill-row">
           <span class="status-dot is-active"></span>
-          <strong>Active History: ${hm.validPlays.toLocaleString()} plays (${hm.totalHours?.toLocaleString() || '—'} hrs)</strong>
+          <strong>Active History: ${hm.validPlays.toLocaleString()} plays (${esc(hm.totalHours?.toLocaleString() || '—')} hrs)</strong>
         </div>
-        <p class="status-detail">Spanning ${yearSpan} (${hm.firstDate} to ${hm.lastDate}) · Source: ${hm.sourceFolder || 'Imported'}${hm.connectedSpotify ? ' · Merged with live Spotify' : ''}</p>
+        <p class="status-detail">Spanning ${esc(yearSpan)} (${esc(hm.firstDate)} to ${esc(hm.lastDate)}) · Source: ${esc(hm.sourceFolder || 'Imported')}${hm.connectedSpotify ? ' · Merged with live Spotify' : ''}</p>
       `;
     } else if (local?.available) {
       box.innerHTML = `
         <div class="status-pill-row">
           <span class="status-dot"></span>
-          <strong>Detected in project folder: ${local.sourceFolder}</strong>
+          <strong>Detected in project folder: ${esc(local.sourceFolder)}</strong>
         </div>
-        <p class="status-detail">${local.validPlays.toLocaleString()} plays (${local.totalHours} hrs) across ${local.fileCount} files (${local.firstDate} to ${local.lastDate}).</p>
+        <p class="status-detail">${local.validPlays.toLocaleString()} plays (${esc(local.totalHours)} hrs) across ${esc(local.fileCount)} files (${esc(local.firstDate)} to ${esc(local.lastDate)}).</p>
       `;
     } else {
       box.innerHTML = `

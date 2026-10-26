@@ -12,7 +12,6 @@ const STARLIGHT_HEX = '#F4E9C8';
 // Quiet matte levels for unselected background nodes
 const DIM_PLANET_FOCUS = 0.25;
 const DIM_SUN_FOCUS = 0.70;
-const DIM_MOON_FOCUS = 0.0;
 
 const EDGE_STYLE = {
   artist_genre: { opacity: 0.05, focused: 0.52 },
@@ -284,7 +283,6 @@ export class CelestialFactory {
       const isHovered = Boolean(hoveredNode && hoveredNode.id === node.id);
       const scaleVal = node.lensScale ?? 1;
       const activeVisible = Boolean(h.visible) && (scaleVal > 0.01) && ((node.focusTarget ?? 1) > 0.05 || isHovered);
-      const isLit = (node.focusTarget ?? 1) >= 0.65 || isHovered;
       const baseR = node.baseRadius;
       const r = activeVisible ? baseR * scaleVal : 0;
       sc.copy(h.scale).multiplyScalar(r);

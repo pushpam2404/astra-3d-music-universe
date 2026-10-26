@@ -175,7 +175,7 @@ export function attachPressFeedback(target, { scale = 0.96 } = {}) {
         animate(element, { transform: 'scale(1)' }, { type: 'spring', visualDuration: 0.3, bounce: 0.22 });
       };
     });
-  } catch (err) {
+  } catch {
     // Graceful fallback if selector or element is invalid
   }
 }

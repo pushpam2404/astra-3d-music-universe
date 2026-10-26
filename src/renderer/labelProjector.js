@@ -1,13 +1,12 @@
 // src/renderer/labelProjector.js
 import * as THREE from 'three';
 import { nodeMatchesLens } from './celestialFactory.js';
+import { escapeHtml, safeColor } from '../ui/escapeHtml.js';
 
 const tempProjVec = new THREE.Vector3();
 const LABEL_PADDING = 4;
 const TOP_ARTISTS_PER_CLUSTER = 3;
 const TOP_ARTISTS_OVERALL = 14;
-
-const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /**
  * Projects 3D nodes to HTML labels. Labels are placed greedily by priority and any
@@ -47,8 +46,8 @@ export class LabelProjector {
     if (node.isBridge) el.classList.add('label-bridge');
 
     const leadIcon = node.type === 'track'
-      ? `<span class="label-song-icon" style="color:${node.color}">◆ ♪</span>`
-      : `<span class="label-dot" style="background:${node.color}"></span>`;
+      ? `<span class="label-song-icon" style="color:${safeColor(node.color)}">◆ ♪</span>`
+      : `<span class="label-dot" style="background:${safeColor(node.color)}"></span>`;
 
     const roleBadges = node.type === 'artist'
       ? `<span class="label-primary-badge">PRIMARY</span><span class="label-collab-badge">COLLAB</span>`

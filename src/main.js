@@ -15,7 +15,7 @@ import {
   exportUniverseSnapshotJson,
   exportListeningHistoryCsv
 } from './api/historyStorage.js';
-import { createUniverseScene } from './renderer/universeScene.js';
+import { createUniverseScene, webglAvailable } from './renderer/universeScene.js';
 import { CelestialFactory, nodeMatchesLens } from './renderer/celestialFactory.js';
 import { GalaxyLayoutEngine } from './physics/galaxyLayout.js';
 import { CameraFlightController } from './renderer/cameraController.js';
@@ -50,6 +50,10 @@ const MAX_TRAILS = 400;
 const plural = (n, one, many = `${one}s`) => `${Number(n || 0).toLocaleString()} ${n === 1 ? one : many}`;
 
 async function initApp() {
+  if (!webglAvailable()) {
+    document.getElementById('webgl-fallback').hidden = false;
+    return;
+  }
   const { scene, camera, renderer, controls } = createUniverseScene(document.getElementById('webgl-canvas-container'));
 
   const viewShift = { x: 0, y: 0, tx: 0, ty: 0 };

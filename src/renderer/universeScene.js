@@ -2,6 +2,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+/** True when this browser can create a WebGL context at all. */
+export function webglAvailable() {
+  try {
+    const canvas = document.createElement('canvas');
+    return Boolean(window.WebGLRenderingContext && (canvas.getContext('webgl2') || canvas.getContext('webgl')));
+  } catch {
+    return false;
+  }
+}
+
 export function createUniverseScene(canvasContainer) {
   // 1. Scene
   const scene = new THREE.Scene();
@@ -30,6 +40,19 @@ export function createUniverseScene(canvasContainer) {
 
   canvasContainer.appendChild(renderer.domElement);
 
+  // A lost GPU context (driver reset, too many tabs) leaves a blank canvas. Say so, and
+  // let the browser restore it: three.js re-uploads its buffers when it comes back.
+  const fallback = document.getElementById('webgl-fallback');
+  const fallbackText = document.getElementById('webgl-fallback-text');
+  renderer.domElement.addEventListener('webglcontextlost', (event) => {
+    event.preventDefault();
+    if (fallbackText) fallbackText.textContent = 'The graphics context was lost. Astra will redraw as soon as the browser gives it back; if it does not, reload the page.';
+    if (fallback) fallback.hidden = false;
+  });
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    if (fallback) fallback.hidden = true;
+  });
+
   // 4. Orbit Controls (tuned for both desktop mouse and mobile one-finger orbit / two-finger pinch+pan)
   const isCoarsePointer = window.matchMedia('(pointer: coarse)').matches;
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -50,7 +73,8 @@ export function createUniverseScene(canvasContainer) {
     TWO: THREE.TOUCH.DOLLY_PAN
   };
   // A slow turn makes the depth readable; the Motion slider controls its speed.
-  controls.autoRotate = true;
+  // (Left off when the system asks for reduced motion; the slider can still turn it on.)
+  controls.autoRotate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   controls.autoRotateSpeed = 0.35;
 
   // 5. Ambient & Directional Lighting

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Astra · your music, mapped</title>
   <meta name="description" content="Connect Spotify and import your streaming history to explore everything you listen to as a 3D galaxy: genres as suns, artists as planets, songs as moons.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -155,6 +155,14 @@
     <div id="enrichment-status-banner" class="enrichment-banner" hidden></div>
     <p id="universe-notice" hidden></p>
     <p id="layers-hidden-note" hidden>All layers are hidden. <button type="button" id="layers-reset-btn">Show everything</button></p>
+  </div>
+
+  <!-- Shown when the browser cannot give us a WebGL context -->
+  <div id="webgl-fallback" role="alert" hidden>
+    <div class="loading-card">
+      <p class="loading-title">Astra needs WebGL</p>
+      <p class="loading-text" id="webgl-fallback-text">This browser could not start WebGL, which draws the 3D map. Turn on hardware acceleration in the browser settings, or try another browser or device.</p>
+    </div>
   </div>
 
   <!-- Loading -->
