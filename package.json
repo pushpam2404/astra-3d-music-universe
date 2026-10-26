@@ -27,7 +27,7 @@
     "build": "vite build",
     "start": "node server/index.js --production",
     "preview": "vite preview",
-    "test": "node --test tests/unit",
+    "test": "node --test \"tests/unit/*.test.js\"",
     "lint": "oxlint --deny-warnings src server api tests"
   },
   "dependencies": {
