@@ -47,7 +47,6 @@ lerna-debug.log*
 
 # Technical context & AI manual
 astra_context.md
-ASTRA_CONTEXT.md
 CLAUDE.md
 # Taste-test fixtures (generated from Last.fm; regenerate with tests/tastes/generate.mjs)
 tests/tastes/.cache/

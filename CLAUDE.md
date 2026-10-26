@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides comprehensive architectural and operational context to Claude Code and any AI coding agent working in this repository. Read this file and [`ASTRA_CONTEXT.md`](./ASTRA_CONTEXT.md) before modifying code.
+This file provides comprehensive architectural and operational context to Claude Code and any AI coding agent working in this repository. Read this file before modifying code.
 
 ---
 
