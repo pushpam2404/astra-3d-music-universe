@@ -98,7 +98,7 @@ To use Spotify, create an app in the [Spotify developer dashboard](https://devel
 npm test
 ```
 
-The 24 tests cover the streaming-history parser (duplicates, old and new field names, bad timestamps), the cluster colour palette, tag filtering and country checks, the session cookie (round trip, tampering, wrong secret, no secret), and the API (anonymous access to `/api/universe` is refused, bad and oversized JSON get a JSON error).
+The 26 tests cover the streaming-history parser (duplicates, old and new field names, bad timestamps), the cluster colour palette, tag filtering and country checks, the artist genre cache (blank results expire after a week), the session cookie (round trip, tampering, wrong secret, no secret), and the API (anonymous access to `/api/universe` is refused, bad and oversized JSON get a JSON error).
 
 `tests/tastes/` is a separate quality check for the clustering. It builds histories for eight very different listeners from Last.fm's public charts and scores the clusters against the chart each artist came from. It needs the network and a Last.fm key, so it is not part of CI. Run it with `node tests/tastes/run.mjs` after changing tags, similarity, clustering or naming.
 
@@ -116,16 +116,15 @@ The project deploys to Vercel as it is. `vercel.json` sends `/api/*` to the Expr
 
 ## Limitations
 
-- On a free Last.fm-less setup, history-only artists are looked up through MusicBrainz one at a time, which is slow for big libraries, and an artist that gets no tags stays in "Genre Unknown" until its cached entry expires.
+- Without a Last.fm key, history-only artists are looked up on MusicBrainz about one per second, so a large library takes a while to fill in. Lookups that run out of time are retried in the same session; an artist that really has no tags is remembered as blank for a week, then tried again.
 - Genres depend on public databases, so niche artists and artists that share a name with someone else can be placed wrongly.
-- The whole app is one 970 kB JavaScript bundle (about 260 kB gzipped), mostly Three.js. It has not been split.
+- The first load is a 765 kB script (about 210 kB gzipped), mostly Three.js. The clustering code (UMAP, Louvain) is a separate 207 kB chunk that loads only when a map is built from history or Spotify data.
 - Spotify's rate limits and development-mode rules apply: only accounts you add in the dashboard can sign in.
 - Visual checks for this README were done in desktop Chrome with a real GPU. Low-end and mobile GPUs were not tested.
 
 ## Roadmap
 
-- Split the clustering code out of the first load.
-- Retry lookups that ran out of time instead of caching them as empty.
+- Load Three.js in its own chunk so the HUD can appear before the scene is ready.
 - A shared rate-limit store.
 - Keyboard navigation inside the 3D scene.
 
