@@ -1,133 +1,134 @@
 # Astra
 
-Your Spotify listening, mapped as a living 3D celestial universe. Genre clusters form planetary systems with a solid central cluster planet, artists orbit as planets, and individual tracks circle them as faceted crystal moons. Artists that share genres, home countries, collaborations, or listening sessions gravitate into the same cluster regardless of language.
+[![CI](https://github.com/pushpam2404/astra-3d-music-universe/actions/workflows/ci.yml/badge.svg)](https://github.com/pushpam2404/astra-3d-music-universe/actions/workflows/ci.yml)
+
+Astra turns your Spotify listening into a 3D map you can fly around. Artists that share genres, a home country, collaborations or listening sessions end up in the same cluster. Each cluster gets a planet at its centre, artists orbit it as smaller planets, and songs circle their artist as faceted moons.
 
 Live: https://astra-3d-music-universe.vercel.app
 
----
+![Astra's map of a listening history, seven clusters with names](docs/screenshots/overview.png)
 
-## Highlights
+The screenshots in this README come from a synthetic history I generated for 90 well-known artists, not from anyone's real account. Genres were looked up through the app's normal pipeline, so a few artists land in odd clusters (Taylor Swift ends up next to Daft Punk) where the lookup found no usable tags.
 
-* **Dual Ingestion (Spotify Web API & Extended Streaming History):** Connect your Spotify account to map your top artists/tracks (`short_term`, `medium_term`, `long_term`), recent plays, and Liked Songs. Import standard `StreamingHistory_music_*.json` or multi-year Spotify Extended Streaming History (`Streaming_History_Audio_*.json` / `endsong_*.json`) directly in the browser to visualize 50,000+ plays across years without hitting serverless payload limits.
-* **Isomorphic Browser-Side Graph Assembly:** Raw streaming history files are parsed, merged with live/cached Spotify signals, and clustered via Louvain community detection + 3D UMAP directly in the browser (`src/etl/universeAssembler.js`), keeping `/api/*` requests lightweight and avoiding Vercel's 4.5 MB serverless body limit (`HTTP 413`).
-* **Multi-Source Dynamic Genre & Origin Enrichment:** Because Spotify's Development Mode API no longer returns artist genres, Astra resolves artist genres, occupations, and origin countries via **Wikidata SPARQL**, **MusicBrainz**, and **Last.fm** (`track.getTopTags` + `artist.getTopTags`) in background batches (`POST /api/enrich`), caching results in `localStorage` so repeat loads require zero duplicate lookups.
-* **Perceptually Distinct OKLab/OKLCH Cluster Palette & Crisp Silhouette Borders:** Clusters receive unique colors in size order using a greedy farthest-point ordering in OKLab space (`ORDERED_CLUSTER_COLORS` in `src/config/genreTaxonomy.js`), with 137.5° golden-angle OKLCH overflow past 24 clusters. All central cluster planets, artist planets, and crystal song moons are 100% opaque (`transparent: false, depthWrite: true`) with zero bloom/glow blowout and a screen-space `fwidth` black border on light-colored clusters so overlapping nodes remain individually recognizable.
-* **Temporal & Memory Lenses:** Filter the 3D cosmos and side-panel explorers simultaneously through time capsules and listening habits: *All time*, *Past favorites*, *Haven’t heard in a while (Dormant)*, *Current rotation*, *All-time staples*, or specific eras (`2026`, `Early 2025`, `2025`, `Early 2024`, `2024`, `2023`, `2020–22`).
-* **Collision-Free 3D Layout:** Cluster centers sit on an affinity-seriated Fibonacci sphere with pairwise clearance relaxation, and artist planets run through a 3D overlap solver (`resolveClusterArtistOverlaps` and `resolveArtistCollisions`) that reserves clearance for each planet's moon orbit shell.
-* **Export & Snapshot Portability:** Export your computed universe as an Astra Universe Snapshot (`.json`) for instant re-import without re-clustering, or export an aggregated listening history table as `.csv`. Toggle freely between **Spotify + History Songs** and **Spotify API Only** modes.
+## What it does
 
----
+You can feed Astra two ways, and combine them.
 
-## System Architecture
+- Connect Spotify to read your top artists and tracks for three time ranges, recent plays and Liked Songs.
+- Import your Spotify "Extended Streaming History" (the `.zip` as downloaded, the unzipped folder, or the `Streaming_History_Audio_*.json` files). Parsing and clustering run in the browser, so a 100 MB export never goes through a server.
+
+From there:
+
+- Genres come from public data, because Spotify no longer returns artist genres to apps in development mode. Astra looks artists up on Wikidata and MusicBrainz, plus Last.fm if you give it an API key, and keeps the results in `localStorage` for 30 days.
+- Clusters are found with Louvain community detection on a similarity graph (shared genres and countries, collaborations, songs played in the same session). Positions come from a 3D UMAP embedding, then a collision pass keeps planets from overlapping.
+- Cluster names are picked from the genres that set a cluster apart from the others (class-based TF-IDF). If a group has no real genre of its own it is merged elsewhere or labelled "Genre Unknown" instead of getting an invented name.
+- Lenses filter the whole map and the side panel together: past favourites, things you have not heard in a while, current rotation, all-time staples, and one lens per year in your history. "Replay years" steps through the years.
+- Selected artist, cluster and lens live in the URL (`?node=&lens=`), so Back and Forward work and links reopen the same view.
+- You can export the computed map as a snapshot `.json` to re-import later, or the aggregated history as `.csv`.
+
+| Cluster focus | Artist | Lens: current rotation |
+|---|---|---|
+| ![A single cluster with its side panel](docs/screenshots/cluster.png) | ![One artist with its songs and timeline](docs/screenshots/artist.png) | ![Map filtered to current rotation](docs/screenshots/lens-current-rotation.png) |
+
+| Mobile | Mobile, cluster sheet | No WebGL |
+|---|---|---|
+| ![Phone layout](docs/screenshots/mobile-overview.png) | ![Cluster details in the bottom sheet](docs/screenshots/mobile-cluster.png) | ![Message shown when WebGL is unavailable](docs/screenshots/no-webgl.png) |
+
+## How it is put together
 
 ```text
-┌──────────────────────────────────────────────────────────────────────┐
-│                               Browser                                │
-│  • Three.js WebGL Scene (src/renderer/universeScene.js)              │
-│  • CelestialFactory: Opaque Cluster Planets, Instanced Artist        │
-│    Spheres, Faceted Icosahedron Song Moons, 3D Focus Tubes           │
-│  • Custom GLSL Shaders (planetShader.js, solarPlasmaShader.js)       │
-│  • Greedy Overlap-Culling HTML LabelProjector (labelProjector.js)    │
-│  • Isomorphic ETL & Clustering (historyParser.js,                    │
-│    universeAssembler.js, server/clustering.js, server/clusterNaming) │
-│  • Client Cache: IndexedDB (history/snapshots) + localStorage        │
-│    (6-hour Spotify signal cache + 30-day artist genre metadata)      │
-└──────────────────▲──────────────────────────────────▲────────────────┘
-                   │                                  │
-     Lightweight Spotify Signals        Batched /api/enrich (40–50 artists)
-     (signalsOnly=true, 6h TTL)         Wikidata + MusicBrainz + Last.fm
-                   │                                  │
-┌──────────────────▼──────────────────────────────────▼────────────────┐
-│                      Express / Vercel Backend                        │
-│  • /api/auth/*      Stateless AES-256-GCM cookie OAuth flow          │
-│  • /api/universe    Signals-only fetch or server-side fallback       │
-│  • /api/enrich      Wikidata SPARQL + MusicBrainz + Last.fm resolver │
-└──────────────────────────────────────────────────────────────────────┘
+Browser                                           Express / Vercel function
+-------                                           -------------------------
+Three.js scene (src/renderer)                     /api/auth/*      Spotify OAuth, session in an
+HUD and detail panel (src/ui)                                      encrypted HttpOnly cookie
+History parser, merge and clustering   <------->  /api/universe    Spotify signals only (no history)
+  (src/etl, server/clustering.js)                 /api/enrich      genre lookups: Wikidata,
+IndexedDB: imported history, snapshots                             MusicBrainz, Last.fm
+localStorage: Spotify signals (6 h),              /api/genre-vocabulary  genre catalogue, CDN cached
+  artist genres (30 days)
 ```
 
----
+- `src/main.js` owns the app state and the frame loop. `src/renderer/celestialFactory.js` builds the meshes (instanced artist planets and song moons, one planet per cluster) and applies focus and lens culling. The shaders are in `src/renderer/shaders/`. Everything is opaque on purpose, with a dark outline on pale clusters so overlapping bodies stay readable.
+- `src/etl/historyParser.js` parses streaming history. `src/etl/universeAssembler.js` merges it with Spotify data and calls `server/clustering.js` and `server/clusterNaming.js`. Those two live under `server/` but are plain modules, and the browser imports them too.
+- Spotify tokens never reach the browser. The server keeps them in an AES-256-GCM encrypted cookie, so any serverless instance can read the session and nothing is stored in a database.
+- Spotify calls are cached in the browser for 6 hours, and the app never calls Spotify from the background lookup loop, to stay clear of rate limits (HTTP 429).
+- Background lookups refine the map while you are idle: after enough new genres arrive it re-clusters and glides the planets to their new places, drawing a short trail for artists that changed cluster.
+- There is no hardcoded table of artists, genres or countries. Which tags count as genres, languages or places is decided from Wikidata and MusicBrainz data, `Intl` names, and how consistently a tag groups similar artists in your own library.
 
-## Repository & Module Map
+[`CLAUDE.md`](CLAUDE.md) has more detail on the design rules for people working on the code.
 
-| File / Directory | Target | Responsibilities |
-| :--- | :--- | :--- |
-| `src/main.js` | Browser | Application entry point, `AppState` owner, multi-touch-safe pointer/pinch raycasting, background `/api/enrich` batch loop, and `requestAnimationFrame` loop. |
-| `src/config/genreTaxonomy.js` | Isomorphic | Maps fine-grained genres to broad families and provides the OKLab/OKLCH maximally-distant cluster color palette (`CLUSTER_COLORS`, `ORDERED_CLUSTER_COLORS`, `getDistinctClusterColor`). Must remain free of browser APIs. |
-| `src/config/constants.js` | Browser | Tier radius bounds (`TIER_BOUNDS`) and 3D layout constants (`LAYOUT_CONFIG`). |
-| `src/etl/historyParser.js` | Isomorphic | Parses Spotify Account Data & Extended Streaming History JSON dumps, deduplicates plays, extracts featured artists, computes session co-listening pairs, and classifies temporal memory profiles (`past_fav`, `dormant`, `current_rotation`, `all_time_staple`, era tags). |
-| `src/etl/universeAssembler.js` | Isomorphic | Merges Spotify API signals with `historySummary`, ranks artists/tracks, invokes `clusterArtists`, and builds the unified `{ genres, artists, tracks, historyMeta }` dataset. |
-| `src/etl/graphNormalizer.js` | Browser | Normalizes raw entities into 3D graph nodes & edges (`artist_genre`, `artist_bridge`, `track_artist`, `track_collab`) and assigns size-ordered `ORDERED_CLUSTER_COLORS`. |
-| `src/physics/galaxyLayout.js` | Browser | Places cluster centers on an affinity-ordered Fibonacci sphere, blends 3D UMAP coordinates with spherical shells, resolves intra-cluster and global planet-to-planet collisions, and orbits song moons. |
-| `src/renderer/celestialFactory.js` | Browser | Builds and updates all Three.js meshes: solid non-glowing central cluster planets (`buildGenreSun`), instanced artist planets (`buildArtistPlanets`), instanced crystal song moons (`buildTrackSatellites`), connection tubes, and strict lens/focus culling (`updateFocus`). |
-| `src/renderer/shaders/planetShader.js` | Browser | Opaque GLSL shaders for artist spheres (`createPlanetMaterial`) and flat-faceted crystal song moons (`createMoonCrystalMaterial`), including screen-space `fwidth` black borders on light-colored clusters. |
-| `src/renderer/shaders/solarPlasmaShader.js` | Browser | Opaque, non-glowing GLSL shader for central cluster planets (`createSolarShaderMaterial`) with subtle atmospheric bands and a crisp black silhouette border on light-colored clusters. |
-| `src/renderer/labelProjector.js` | Browser | Greedy screen-space HTML label projector with overlap rejection. Never labels dimmed or culled nodes (`focusTarget < 0.65` or `lensScale <= 0.01`) and strictly enforces active lens filters. |
-| `src/ui/hud.js` & `src/ui/detailPanel.js` | Browser | Top bar, Time & Memory Lens bar, History import/export modal, View popover, and synchronized right-hand side panel / mobile bottom sheet. |
-| `src/api/backendClient.js` | Browser | Client API wrapper with 6-hour `localStorage` caching for Spotify OAuth signals (`astra_spotify_signals_v1`) and browser-side universe assembly. |
-| `src/api/historyStorage.js` | Browser | IndexedDB persistence (`astra_history_db`) for imported `historySummary` and `universeSnapshot`, plus `.json` snapshot and `.csv` export generators. |
-| `server/clustering.js` & `server/clusterNaming.js` | Isomorphic | Sparse TF-IDF genre/country/collaboration/co-listening similarity graph, seeded Louvain community detection, seeded 3D UMAP embedding, and support×lift cluster naming. |
-| `server/enrich.js`, `genreEnrichment.js`, `musicbrainz.js`, `lastfm.js` | Node.js | Multi-source artist genre & country lookup pipeline (Wikidata SPARQL, MusicBrainz API, Last.fm track/artist top tags). |
+## Running it
 
----
+You need Node 20.12 or newer. Spotify credentials are optional if you only want to explore an imported history.
 
-## Key Architectural & Visual Invariants
+```bash
+git clone https://github.com/pushpam2404/astra-3d-music-universe.git
+cd astra-3d-music-universe
+npm install
+cp .env.example .env     # fill in what you have
+npm run dev              # http://127.0.0.1:5173
+```
 
-1. **Browser-Side Assembly (Vercel 4.5 MB Limit Defense):** Extended history dumps are 20–100+ MB. Always parse and assemble history universes client-side via `src/etl/historyParser.js` and `src/etl/universeAssembler.js` (fetching live Spotify signals with `signalsOnly: true`) so requests never hit Vercel `HTTP 413` payload limits.
-2. **Spotify Rate-Limit Defense (`HTTP 429` Prevention):** Never query Spotify endpoints inside background enrichment loops. Cache user OAuth signals in `localStorage` for 6 hours (`SPOTIFY_CACHE_TTL_MS`) and route all metadata enrichment through `/api/enrich` (Wikidata, MusicBrainz, Last.fm). Never hardcode static artist lookup tables.
-3. **100% Opaque Celestial Bodies & Non-Glowing Central Planets:** Central cluster planets (`solarPlasmaShader.js`), artist planets, and faceted crystal song moons (`planetShader.js`) render as solid 3D bodies (`transparent: false, depthWrite: true`) with `BLOOM_STRENGTH = 0.0`, `NEBULA_OPACITY = 0.0`, and no additive glow sprites washing out labels.
-4. **Black Silhouette Borders on Light-Colored Clusters:** Light-colored clusters render with a crisp screen-space black outline (`fwidth(radial)` in `planetShader.js` and `solarPlasmaShader.js`, plus dark borders on `.cluster-swatch`, `.label-dot`, and `.chip-dot`) so overlapping spheres and crystals stay distinct.
-5. **Strict Lens & Focus Culling (Zero Orphan Lines or Labels):** When a Time/Memory Lens is active, non-matching artists and tracks are culled (`focusTarget = 0, lensScale = 0`), edges only render when both endpoints are lit (`focusTarget >= 0.65`), and `LabelProjector` never shows labels for unlit or non-matching nodes.
-6. **3D Collision Clearance:** Always run `resolveClusterArtistOverlaps` and `resolveArtistCollisions` after UMAP placement, accounting for each planet's radius plus its moon orbital shell (`r_planet + r_moons + padding`).
-7. **Consensus-Driven Cluster Naming & Clamped Lift:** Cluster naming in `server/clusterNaming.js` strictly requires consensus ($c \ge 3$ artists, $\ge 15\%$ support among genre-known members) and clamps inverse-frequency lift ($\le 14$) with exponential support weighting ($\text{Support}^{1.35}$) so 1-off niche tags (e.g., 1 Bhojpuri play in a 200+ artist Hindi Indie cluster) cannot hijack the community title. Titles strictly use musical, regional, or sonic universe descriptors—never `Artist & Co.` fallbacks.
-8. **Dynamic Cluster Scaling (8–22 Clusters):** Louvain resolution dynamically scales with library volume ($1.3$ to $2.25$) and cluster caps scale dynamically ($\approx 8 + \sqrt{\text{artists} - 100} \times 0.21$, up to 22) so large multi-year listening libraries preserve distinct musical sub-scenes (e.g. separating Hindie, Filmi, Punjabi & Bhangra, and Desi Hip-Hop) instead of collapsing into giant monolithic blobs.
-9. **Enrichment Cache Scale & Permanent Freshness:** `MAX_POST_KNOWN_META` is set to 8,000 so multi-thousand-artist libraries send complete metadata to `/api/universe` without truncation loops, and `isFreshMeta` preserves all valid cached genres permanently, preventing version-bump churn and repeat "Reload to apply" loops.
+Without Spotify credentials the page opens on a small demo map, and you can import a history with the History button.
 
----
+To use Spotify, create an app in the [Spotify developer dashboard](https://developer.spotify.com/dashboard) and add the redirect URI `http://127.0.0.1:5173/api/auth/callback`. Spotify refuses `http://localhost`, so use `127.0.0.1`. In development mode your Spotify account also has to be listed under User Management.
 
-## Getting Started
+| Script | What it does |
+|---|---|
+| `npm run dev` | Express with Vite as middleware, restarts when `server/` changes |
+| `npm run dev:client` | Vite only (no `/api`, so no Spotify or lookups) |
+| `npm run build` | Production bundle into `dist/` |
+| `npm start` | Serves `dist/` and `/api` from Express |
+| `npm test` | Unit and API tests (`node --test`, no extra dependencies) |
+| `npm run lint` | oxlint |
 
-### Prerequisites
+### Environment variables
 
-* Node.js (v18 or higher)
-* A [Spotify Developer Application](https://developer.spotify.com/dashboard) (optional if only exploring imported Extended Streaming History JSON files)
-* (Optional) A Last.fm API Key (`LASTFM_API_KEY`) for expanded community genre tags
+| Variable | Needed | Purpose |
+|---|---|---|
+| `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | for Spotify login | From the developer dashboard. Server only. |
+| `SPOTIFY_REDIRECT_URI` | no | Defaults to `<current origin>/api/auth/callback`. Must match the dashboard exactly. |
+| `SESSION_SECRET` | recommended | Key for the session cookie. Falls back to the client secret. With neither set, no sessions are accepted. |
+| `LASTFM_API_KEY` | no | Adds Last.fm community tags for artists Wikidata and MusicBrainz do not describe. |
+| `PORT`, `HOST` | no | Defaults to `5173` and `127.0.0.1`. |
 
-### Local Setup
+## Tests
 
-1. **Clone the repository and install dependencies:**
-   ```bash
-   git clone https://github.com/your-username/spotify.git
-   cd spotify
-   npm install
-   ```
+```bash
+npm test
+```
 
-2. **Configure environment variables:**
-   ```bash
-   cp .env.example .env
-   ```
-   Edit `.env` and fill in your credentials:
-   ```env
-   SPOTIFY_CLIENT_ID=your_spotify_client_id
-   SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
-   SESSION_SECRET=a_random_long_session_string
-   LASTFM_API_KEY=your_optional_lastfm_key
-   PORT=5173
-   ```
+The 24 tests cover the streaming-history parser (duplicates, old and new field names, bad timestamps), the cluster colour palette, tag filtering and country checks, the session cookie (round trip, tampering, wrong secret, no secret), and the API (anonymous access to `/api/universe` is refused, bad and oversized JSON get a JSON error).
 
-3. **Configure Spotify Dashboard Redirect URIs:**
-   Inside your [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) app settings:
-   * Local development: `http://127.0.0.1:5173/api/auth/callback`
-   * Production: `https://<your-vercel-domain>.vercel.app/api/auth/callback`
-   *(Note: Spotify rejects `localhost` over HTTP; always use `127.0.0.1`.)*
+`tests/tastes/` is a separate quality check for the clustering. It builds histories for eight very different listeners from Last.fm's public charts and scores the clusters against the chart each artist came from. It needs the network and a Last.fm key, so it is not part of CI. Run it with `node tests/tastes/run.mjs` after changing tags, similarity, clustering or naming.
 
-4. **Run the local development server:**
-   ```bash
-   npm run dev
-   ```
-   Open `http://127.0.0.1:5173` in your browser.
-
----
+CI (`.github/workflows/ci.yml`) runs lint, the tests and the build on every push and pull request.
 
 ## Deploying
 
-The project deploys to Vercel as-is. `vercel.json` routes `/api/*` to the Express backend in `api/index.js`, and the Vite build output (`dist/`) is served statically. Set `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SESSION_SECRET`, and optionally `LASTFM_API_KEY` as environment variables in your Vercel Project Settings.
+The project deploys to Vercel as it is. `vercel.json` sends `/api/*` to the Express app in `api/index.js` and serves the Vite build statically, with a Content-Security-Policy and a few other security headers. Set `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SESSION_SECRET` and optionally `LASTFM_API_KEY` in the project's environment variables, and register `https://<your-domain>/api/auth/callback` in the Spotify dashboard.
+
+## Notes on security
+
+- `/api/enrich` is open, because people who only import a history have no session. It is limited to 200 requests per 10 minutes per IP, but the counter is kept in memory, so on Vercel each warm instance counts separately. A shared store would be needed for a hard limit.
+- The browser never sends streaming history to the server, and `/api/universe` refuses anonymous requests.
+- Text that came from imported files is escaped before it is put into the page.
+
+## Limitations
+
+- On a free Last.fm-less setup, history-only artists are looked up through MusicBrainz one at a time, which is slow for big libraries, and an artist that gets no tags stays in "Genre Unknown" until its cached entry expires.
+- Genres depend on public databases, so niche artists and artists that share a name with someone else can be placed wrongly.
+- The whole app is one 970 kB JavaScript bundle (about 260 kB gzipped), mostly Three.js. It has not been split.
+- Spotify's rate limits and development-mode rules apply: only accounts you add in the dashboard can sign in.
+- Visual checks for this README were done in desktop Chrome with a real GPU. Low-end and mobile GPUs were not tested.
+
+## Roadmap
+
+- Split the clustering code out of the first load.
+- Retry lookups that ran out of time instead of caching them as empty.
+- A shared rate-limit store.
+- Keyboard navigation inside the 3D scene.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
