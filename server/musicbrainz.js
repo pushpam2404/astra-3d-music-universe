@@ -125,11 +125,14 @@ export async function searchMusicBrainzByTrack(artists, budgetMs) {
   const deadline = Date.now() + budgetMs;
   const mbidFor = new Map(); // mbid → our id
   let looked = 0;
+  // Artists whose song was actually searched; the rest ran out of time and should be retried.
+  const searched = new Set();
   try {
     for (const a of artists) {
       if (!a.track || Date.now() + 2500 > deadline) break;
       if (looked > 0) await sleep(1100);
       looked++;
+      searched.add(a.id);
       const query = `recording:${quoteLucene(a.track)} AND artist:${quoteLucene(a.name)}`;
       const res = await mbGet('/recording', new URLSearchParams({ query, fmt: 'json', limit: '5' }), AbortSignal.timeout(8000));
       const want = squashName(a.name);
@@ -138,7 +141,7 @@ export async function searchMusicBrainzByTrack(artists, budgetMs) {
         if (credit?.artist?.id) { mbidFor.set(credit.artist.id, a.id); break; }
       }
     }
-    if (!mbidFor.size || Date.now() + 1500 > deadline) return { metaById: new Map(), looked };
+    if (!mbidFor.size || Date.now() + 1500 > deadline) return { metaById: new Map(), looked, searched };
     await sleep(1100);
     const query = [...mbidFor.keys()].map(id => `arid:${id}`).join(' OR ');
     const search = await mbGet('/artist', new URLSearchParams({ query, fmt: 'json', limit: '100' }), AbortSignal.timeout(8000));
@@ -150,8 +153,8 @@ export async function searchMusicBrainzByTrack(artists, budgetMs) {
       try { country = m.country ? regionNames.of(m.country) : null; } catch { country = null; }
       metaById.set(id, { mbid: m.id, country, area: m.area?.name || null, tags: usefulTags(m.tags, m.name, { max: 8 }) });
     });
-    return { metaById, looked };
+    return { metaById, looked, searched };
   } catch (err) {
-    return { metaById: new Map(), looked, error: `MusicBrainz song search failed (${err.message})` };
+    return { metaById: new Map(), looked, searched, error: `MusicBrainz song search failed (${err.message})` };
   }
 }

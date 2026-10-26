@@ -710,8 +710,10 @@ async function initApp() {
         const toSave = {};
         for (const item of batch) {
           const id = item.id || item;
-          const meta = artistMeta?.[id] || { g: [], c: [], t: Date.now(), l: 4 };
-          // Mark as checked in localStorage so we don't re-fetch empty results on every page load
+          // An artist missing from the reply ran out of time (or Last.fm still owes a lookup):
+          // leave it unsaved so the next load tries again instead of caching a blank.
+          const meta = artistMeta?.[id];
+          if (!meta) continue;
           toSave[id] = meta;
           const genres = meta.g || meta.genres;
           if (Array.isArray(genres) && genres.length > 0) {
@@ -719,6 +721,11 @@ async function initApp() {
           }
         }
         saveArtistMeta(toSave);
+
+        // Artists the server ran out of time for go to the back of the queue, as long as this
+        // batch made progress (so a lookup that never succeeds cannot loop forever).
+        const unresolved = batch.filter(item => !artistMeta?.[item.id || item]);
+        if (unresolved.length && unresolved.length < batch.length) unenrichedArtists.push(...unresolved);
 
         waitingToFetchCount = Math.max(0, unenrichedArtists.length - (i + batch.length));
         const finished = waitingToFetchCount === 0;

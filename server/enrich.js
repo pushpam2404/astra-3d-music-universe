@@ -68,7 +68,7 @@ export async function enrichArtists(artists, budgetMs) {
     (!(lf.tagsById.get(a.id) || []).length || lf.viaById.get(a.id) === 'artist'));
   const byTrack = weak.length
     ? await searchMusicBrainzByTrack(weak, Math.max(0, budgetMs - (Date.now() - started)))
-    : { metaById: new Map(), looked: 0 };
+    : { metaById: new Map(), looked: 0, searched: new Set() };
   if (byTrack.error) warnings.push(byTrack.error);
 
   // Which artist is the Last.fm page actually about? If it links a different MusicBrainz
@@ -122,8 +122,9 @@ export async function enrichArtists(artists, budgetMs) {
     // match through the artist's own song), so they may describe a same-name artist.
     const unverified = lf.viaById.get(a.id) === 'artist' && lfTags.length > 0 && !w.genres.length && !matchedBySong;
     meta.set(a.id, { g: genres, c: activeCountries, ...(unverified ? { u: 1 } : {}) });
-    // Complete unless Last.fm still owes us a lookup for this artist.
-    if (!(lastfmOn && !lf.tagsById.has(a.id))) done.add(a.id);
+    // Complete unless Last.fm still owes us a lookup, or the song search never got to this artist.
+    const waitingForSongSearch = weak.includes(a) && !byTrack.searched.has(a.id) && !m.tags.length && !w.genres.length && !(lf.tagsById.get(a.id) || []).length;
+    if (!(lastfmOn && !lf.tagsById.has(a.id)) && !waitingForSongSearch) done.add(a.id);
   });
 
   return {

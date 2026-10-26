@@ -8,13 +8,16 @@
 
 const STORAGE_KEY = 'astra_artist_meta_v1';
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+// "Nothing found" is only remembered for a week: tags get added to Wikidata, MusicBrainz and Last.fm over time.
+const EMPTY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function loadArtistMeta() {
   try {
     const all = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     const now = Date.now();
     Object.keys(all).forEach(id => {
-      if (now - (all[id]?.t || 0) > MAX_AGE_MS) delete all[id];
+      const age = now - (all[id]?.t || 0);
+      if (age > MAX_AGE_MS || (!all[id]?.g?.length && age > EMPTY_MAX_AGE_MS)) delete all[id];
     });
     return all;
   } catch {
