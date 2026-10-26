@@ -4,7 +4,8 @@ node_modules/
 # Production Build Outputs
 dist/
 dist-ssr/
-docs/
+docs/*
+!docs/screenshots/
 
 # Local Environment Variables & Secrets
 .env
