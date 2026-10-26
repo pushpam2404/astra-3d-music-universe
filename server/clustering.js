@@ -18,12 +18,10 @@ import { UMAP } from 'umap-js';
 import { UNCLASSIFIED_FAMILY } from '../src/config/genreTaxonomy.js';
 import { describeClusters } from './clusterNaming.js';
 
-const LOUVAIN_RESOLUTION = 1.3;
 const COUNTRY_TAG_WEIGHT = 0.85;
 const EDGE_THRESHOLD = 0.12;
 const TOGETHER_MAX = 0.65;
 const TOGETHER_FULL = 2.5;
-const TOGETHER_REASSIGN = 0.4;
 const MAX_CANDIDATE_DF = 400;
 const MAX_CANDIDATES = 600;
 const COMMON_TAG_SLICE = 150;
@@ -612,7 +610,7 @@ export function clusterArtists(artists, collabs, together = new Map(), { nameabl
   const groupOf = new Map();
   groups.forEach((ids, c) => { if (isGenreGroup(ids)) ids.forEach(id => groupOf.set(id, c)); });
   for (let pass = 0; pass < 3; pass++) {
-    groups.forEach((ids, c) => ids.forEach(id => {
+    groups.forEach((ids) => ids.forEach(id => {
       if (groupOf.has(id)) return;
       const score = new Map();
       neighbors[byId.get(id).index].forEach(({ j, w }) => {

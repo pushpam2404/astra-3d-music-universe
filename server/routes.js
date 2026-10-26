@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import { getGenreVocabulary } from './genreVocabulary.js';
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import { isSpotifyConfigured, getRedirectUri, REQUIRED_SCOPES } from './config.js';
 import { getSession, saveSession, destroySession, parseCookies, setCookie } from './sessions.js';
 import { buildAuthorizeUrl, exchangeCode, createApi, SpotifyError } from './spotify.js';
@@ -73,9 +74,20 @@ apiRouter.post('/auth/logout', (req, res) => {
 
 // Background genre lookups for artists the universe load didn't get to.
 // Works both when logged into Spotify and when exploring imported streaming history.
+// Anyone can call this (history-only visitors have no session), and each call spends
+// Last.fm, MusicBrainz and Wikidata quota, so cap it per IP. A full library is a few
+// hundred batches, a few seconds apart. The counter is per serverless instance.
+const enrichLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 200,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  message: { error: 'Too many genre lookups from this connection. They resume in a few minutes.' }
+});
 const ENRICH_BATCH_MAX = 50;
 const ENRICH_BUDGET_MS = 15000;
-apiRouter.post('/enrich', express.json({ limit: '500kb' }), async (req, res) => {
+apiRouter.post('/enrich', enrichLimiter, express.json({ limit: '500kb' }), async (req, res) => {
   const hasLocalHistory = getLocalHistoryStatus().available;
   if (!getSession(req) && !hasLocalHistory && !req.body?.allowHistoryEnrich) {
     return res.status(401).json({ error: 'Not connected to Spotify.' });
@@ -90,9 +102,10 @@ apiRouter.post('/enrich', express.json({ limit: '500kb' }), async (req, res) => 
   res.json({ artistMeta, warnings: result.warnings });
 });
 
-// POST carries the artist metadata the browser already learned (`knownMeta`) and optional
-// browser-imported `historySummary` (or falls back to the local history folder on disk).
-apiRouter.post('/universe', express.json({ limit: '25mb' }), universeHandler);
+// POST carries the artist metadata the browser already learned (`knownMeta`). The browser
+// never sends its streaming history here (it assembles that map itself); the server only
+// falls back to a local history folder on disk when running locally.
+apiRouter.post('/universe', express.json({ limit: '2mb' }), universeHandler);
 apiRouter.get('/universe', universeHandler);
 
 async function universeHandler(req, res) {
@@ -100,9 +113,8 @@ async function universeHandler(req, res) {
   const knownMeta = req.body && typeof req.body.knownMeta === 'object' ? req.body.knownMeta : {};
   const signalsOnly = Boolean(req.body?.signalsOnly || req.query?.signalsOnly);
   const spotifyApiOnly = Boolean(req.body?.spotifyApiOnly || req.query?.spotifyApiOnly);
-  const clientHistory = !spotifyApiOnly && req.body?.historySummary?.isAstraHistorySummary ? req.body.historySummary : null;
   const useLocal = !spotifyApiOnly && req.body?.useLocalHistory !== false && !signalsOnly;
-  const historySummary = clientHistory || (useLocal ? getLocalHistorySummary() : null);
+  const historySummary = useLocal ? getLocalHistorySummary() : null;
 
   if (!session && !historySummary) {
     return res.status(401).json({ error: 'Not connected to Spotify and no streaming history loaded.' });

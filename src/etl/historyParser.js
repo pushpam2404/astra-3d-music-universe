@@ -269,9 +269,10 @@ export function parseStreamingEvents(rawEvents) {
     const artistName = (r.master_metadata_album_artist_name || r.artistName || '').trim();
     const trackName = (r.master_metadata_track_name || r.trackName || '').trim();
     const msPlayed = Math.max(0, Number(r.ms_played ?? r.msPlayed ?? 0));
-    const tsRaw = r.ts || r.endTime;
+    const tsRaw = String(r.ts || r.endTime || '');
 
-    if (!artistName || !trackName || !tsRaw) continue;
+    // Date.parse is lenient enough to turn "not a date" into the year 2000, so check the shape first.
+    if (!artistName || !trackName || !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(tsRaw)) continue;
     const t = Date.parse(tsRaw.includes('T') ? tsRaw : `${tsRaw.replace(' ', 'T')}:00Z`);
     if (!Number.isFinite(t)) continue;
 
