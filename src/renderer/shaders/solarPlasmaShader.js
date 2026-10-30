@@ -79,6 +79,10 @@ export const SolarPlasmaFragmentShader = /* glsl */ `
   uniform vec3 uPrimaryColor;
   uniform vec3 uCoreColor;
   uniform float uOpacity;
+  // 0 = full sun, 1 = quiet matte background sphere (eased in JS so dimming fades, not snaps).
+  // The sphere stays 100% opaque either way (invariant 3.3): "fading" means losing its glow and
+  // darkening toward the background, never alpha.
+  uniform float uDim;
   
   varying vec3 vNormal;
   varying vec3 vPosition;
@@ -107,18 +111,21 @@ export const SolarPlasmaFragmentShader = /* glsl */ `
 
     // Energetic solar limb flare
     float rim = pow(1.0 - ndotv, 2.2);
-    vec3 sunColor = surface * (0.65 + 0.40 * diff)
-                  + incandescent * (0.45 + 0.45 * coreLuminance)
-                  + uPrimaryColor * rim * 0.48
-                  + mix(uPrimaryColor, vec3(1.0), 0.6) * spec * 0.25;
+    float luma = dot(uPrimaryColor, vec3(0.299, 0.587, 0.114));
 
-    // Ambient visibility in lens / dimmed modes (never turns pitch black)
-    if (uOpacity < 0.85) {
-      sunColor *= mix(0.55, 0.95, clamp(uOpacity, 0.0, 1.0));
-    }
+    // Everything that makes a sun glow (incandescent core, limb flare, specular) fades out as it dims
+    float lit = 1.0 - uDim;
+    vec3 sunColor = surface * (0.65 + 0.40 * diff)
+                  + (incandescent * (0.45 + 0.45 * coreLuminance)
+                     + uPrimaryColor * rim * 0.48
+                     + mix(uPrimaryColor, vec3(1.0), 0.6) * spec * 0.25) * lit;
+
+    // Dimmed (unselected / no lens match): a darker, slightly desaturated matte sphere.
+    // Never pitch black, so the cluster still reads as a landmark behind the selection.
+    vec3 matte = mix(vec3(luma), sunColor, 0.7) * 0.40;
+    sunColor = mix(sunColor, matte, uDim);
 
     // Crisp black border around the silhouette (strongest on light-colored clusters so they stand out clearly)
-    float luma = dot(uPrimaryColor, vec3(0.299, 0.587, 0.114));
     float maxCh = max(uPrimaryColor.r, max(uPrimaryColor.g, uPrimaryColor.b));
     float isLight = smoothstep(0.30, 0.55, max(luma, maxCh * 0.82));
 
@@ -145,6 +152,7 @@ export function createSolarShaderMaterial(hexColor, energy = 0.8) {
       uTime: { value: 0.0 },
       uEnergy: { value: energy },
       uOpacity: { value: 1.0 },
+      uDim: { value: 0.0 },
       uPrimaryColor: { value: new THREE.Color(hexColor) },
       uCoreColor: { value: new THREE.Color('#FFF6E0') }
     }

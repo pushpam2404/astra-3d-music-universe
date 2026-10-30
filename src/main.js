@@ -58,8 +58,11 @@ async function initApp() {
 
   const viewShift = { x: 0, y: 0, tx: 0, ty: 0 };
   let sheetCover = () => 88;
+  // Below this width the side panel becomes a bottom sheet. Keep in sync with the
+  // `@media (max-width: 900px)` block in src/style.css.
+  const SHEET_QUERY = window.matchMedia('(max-width: 900px)');
   function updateViewOffset(snap = false) {
-    const narrow = window.innerWidth <= 760;
+    const narrow = SHEET_QUERY.matches;
     viewShift.tx = narrow ? 0 : (340 + 16) / 2;
     const barBottom = narrow ? document.getElementById('top-bar').getBoundingClientRect().bottom : 0;
     viewShift.ty = narrow ? (sheetCover() - barBottom) / 2 : 0;
@@ -524,7 +527,15 @@ async function initApp() {
     spotifyApiOnly = AppState.spotifyApiOnly,
     refine = false
   } = {}) {
-    if (!refine) hud.setLoading(true);
+    if (!refine) {
+      // Say where the data is coming from; the old text always claimed Spotify.
+      const fromSpotify = Boolean(authStatus.loggedIn) || spotifyApiOnly;
+      const hasHistory = Boolean(historySummary) && !spotifyApiOnly;
+      const body = fromSpotify
+        ? `Merging your Spotify top charts, recent plays and Liked Songs${hasHistory ? ' with your listening history' : ''}, then grouping every artist by sound.`
+        : 'Reading your listening history, then grouping every artist by sound.';
+      hud.setLoading(true, 'Charting your universe', body);
+    }
     try {
       const { dataset, artistMeta, diagnostics } = await fetchUniverse(loadArtistMeta(), {
         historySummary: spotifyApiOnly ? null : historySummary,

@@ -5,6 +5,7 @@ import { createPlanetMaterial, createMoonCrystalMaterial } from './shaders/plane
 import { COLOR_SPOTIFY_GREEN } from '../config/constants.js';
 
 const FOCUS_LERP = 0.24;
+const SUN_DIM_LERP = 0.1; // ~0.5s to fade a cluster sun's glow out or back in at 60fps
 const SUN_LIGHT_INTENSITY = 1.0;
 const MAX_PULSES = 450;
 const STARLIGHT_HEX = '#F4E9C8';
@@ -858,6 +859,15 @@ export class CelestialFactory {
       if (n.focusLevel === undefined) n.focusLevel = 1;
       const isHovered = Boolean(hoveredNode && hoveredNode.id === n.id);
       const target = isHovered ? Math.max(1.3, n.focusTarget ?? 1) : (n.focusTarget ?? 1);
+      // Cluster suns: ease the glow out (and back) instead of snapping when focus changes.
+      const sunDim = n.type === 'genre' ? n.shaderMaterial?.uniforms?.uDim : null;
+      if (sunDim) {
+        const want = target < 0.85 ? 1 : 0;
+        if (sunDim.value !== want) {
+          sunDim.value += (want - sunDim.value) * SUN_DIM_LERP;
+          if (Math.abs(want - sunDim.value) < 0.01) sunDim.value = want;
+        }
+      }
       if (Math.abs(n.focusLevel - target) < 0.003) continue;
       n.focusLevel = isHovered ? target : (n.focusLevel + (target - n.focusLevel) * FOCUS_LERP);
       if (n.instanceIndex !== undefined && this.trackInfo) {

@@ -1,3 +1,8 @@
+/* Fonts are self-hosted (bundled by Vite), so the CSP needs no third-party font origins. */
+@import '@fontsource-variable/instrument-sans/index.css';
+@import '@fontsource/instrument-serif/400.css';
+@import '@fontsource/instrument-serif/400-italic.css';
+
 /* Astra: a quiet, star-atlas frame around the galaxy. The galaxy is the loud part.
  * Enhanced with Motion AI Kit styling, cohesive cosmic glassmorphism & uniform design tokens.
  */
@@ -6,7 +11,7 @@
   /* Core Cosmic Obsidian Palette */
   --night: #05060E;
   --night-elevated: #0B0E1E;
-  --panel: rgba(12, 15, 30, 0.88);
+  --panel: rgba(12, 15, 30, 0.95); /* near-opaque: no backdrop blur over the live canvas */
   --panel-glass: rgba(16, 20, 40, 0.75);
   --panel-raised: #181C38;
   --panel-border: rgba(236, 234, 246, 0.08);
@@ -15,7 +20,7 @@
   --ink: #ECEAF6;
   --ink-secondary: #C8CBDD;
   --muted: #9BA0BF;
-  --faint: #636686;
+  --faint: #8087A8; /* text tier 3. 4.7:1 on --panel-raised (was #636686, 3.0:1) */
   
   /* Celestial Starlight & Brand Accents */
   --starlight: #F4E9C8;
@@ -34,7 +39,7 @@
 
   /* Typography */
   --serif: 'Instrument Serif', 'Iowan Old Style', Georgia, serif;
-  --sans: 'Instrument Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --sans: 'Instrument Sans Variable', 'Instrument Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 
   /* Layout Constants */
   --gutter: 16px;
@@ -84,6 +89,29 @@ input {
 :focus-visible {
   outline: 2px solid var(--starlight);
   outline-offset: 2px;
+}
+
+.cluster-count,
+.year-count,
+.memory-stat-val,
+.song-meta,
+#universe-stats,
+.btn-history {
+  font-variant-numeric: tabular-nums;
+}
+
+#universe-title,
+.loading-title,
+.panel-heading,
+.detail-title {
+  text-wrap: balance;
+}
+
+#universe-notice,
+.loading-text,
+.loading-hint,
+.modal-lead {
+  text-wrap: pretty;
 }
 
 [hidden] {
@@ -151,8 +179,6 @@ input {
   cursor: pointer;
   white-space: nowrap;
   box-shadow: var(--shadow-btn);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
   user-select: none;
 }
@@ -276,9 +302,9 @@ input {
 
 #top-bar {
   position: fixed;
-  top: var(--gutter);
-  left: var(--gutter);
-  right: var(--gutter);
+  top: calc(var(--gutter) + env(safe-area-inset-top, 0px));
+  left: calc(var(--gutter) + env(safe-area-inset-left, 0px));
+  right: calc(var(--gutter) + env(safe-area-inset-right, 0px));
   height: var(--bar-height);
   z-index: 25;
   display: grid;
@@ -389,8 +415,6 @@ input {
   color: var(--ink);
   font-size: 13.5px;
   box-shadow: var(--shadow-btn);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
@@ -436,9 +460,7 @@ input {
   padding: 6px;
   border-radius: 14px;
   border: 1px solid var(--line-highlight);
-  background: rgba(14, 17, 34, 0.94);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  background: rgba(14, 17, 34, 0.97);
   max-height: 380px;
   overflow-y: auto;
   box-shadow: var(--shadow-panel);
@@ -494,7 +516,7 @@ input {
 
 #lens-bar {
   position: fixed;
-  top: calc(var(--gutter) + var(--bar-height) + 8px);
+  top: calc(var(--gutter) + var(--bar-height) + 8px + env(safe-area-inset-top, 0px));
   left: var(--gutter);
   right: calc(var(--gutter) + var(--panel-width) + 16px);
   z-index: 18;
@@ -514,9 +536,7 @@ input {
   padding: 6px 12px;
   border-radius: var(--radius-full);
   border: 1px solid var(--line);
-  background: rgba(12, 15, 30, 0.88);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: rgba(12, 15, 30, 0.95);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
   pointer-events: auto;
   scrollbar-width: none;
@@ -575,14 +595,12 @@ input {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
   box-shadow: var(--shadow-panel);
 }
 
 #view-panel {
   position: fixed;
-  top: calc(var(--gutter) + var(--bar-height) + 10px);
+  top: calc(var(--gutter) + var(--bar-height) + 10px + env(safe-area-inset-top, 0px));
   right: calc(var(--gutter) + var(--panel-width) + 14px);
   z-index: 35;
   width: 260px;
@@ -726,7 +744,7 @@ input {
 
 #side-panel {
   position: fixed;
-  top: calc(var(--gutter) + var(--bar-height) + 10px);
+  top: calc(var(--gutter) + var(--bar-height) + 10px + env(safe-area-inset-top, 0px));
   right: var(--gutter);
   max-height: calc(100vh - var(--bar-height) - var(--gutter) * 3);
   z-index: 15;
@@ -1356,6 +1374,16 @@ button.chip:hover {
   text-shadow: 0 2px 18px rgba(0, 0, 0, 0.85);
 }
 
+/* Soft scrim so the title stays readable over the galaxy's own labels */
+#universe-caption::before {
+  content: '';
+  position: absolute;
+  inset: -48px -72px -20px -32px;
+  z-index: -1;
+  background: radial-gradient(ellipse at 35% 65%, rgba(5, 6, 14, 0.78) 0%, rgba(5, 6, 14, 0.5) 45%, transparent 75%);
+  pointer-events: none;
+}
+
 #universe-title {
   font-family: var(--serif);
   font-weight: 400;
@@ -1378,14 +1406,12 @@ button.chip:hover {
   gap: 9px;
   padding: 6px 14px;
   border-radius: var(--radius-full);
-  background: rgba(14, 18, 36, 0.92);
+  background: rgba(14, 18, 36, 0.96);
   border: 1px solid rgba(244, 233, 200, 0.3);
   color: var(--ink);
   font-size: 12.5px;
   pointer-events: auto;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
 }
 
 #enrichment-status-banner strong {
@@ -1617,9 +1643,7 @@ button.chip:hover {
   z-index: 60;
   display: grid;
   place-items: center;
-  background: radial-gradient(circle at center, rgba(5, 6, 14, 0.75), rgba(5, 6, 14, 0.94));
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: radial-gradient(circle at center, rgba(5, 6, 14, 0.62), rgba(5, 6, 14, 0.2) 70%);
 }
 
 .loading-card {
@@ -1676,10 +1700,49 @@ button.chip:hover {
 }
 
 .loading-text {
-  color: var(--muted);
+  color: var(--ink-secondary);
   margin-top: 8px;
   font-size: 13.5px;
   line-height: 1.5;
+}
+
+.loading-hint {
+  color: var(--faint);
+  margin-top: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Placeholder rows while the cluster list is being built (transform-only shimmer) */
+.skeleton-list {
+  display: none;
+  list-style: none;
+  gap: 6px;
+}
+
+body.is-loading .skeleton-list {
+  display: grid;
+}
+
+.skeleton-list li {
+  position: relative;
+  height: 58px;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: rgba(236, 234, 246, 0.05);
+}
+
+.skeleton-list li::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(236, 234, 246, 0.08), transparent);
+  transform: translateX(-100%);
+  animation: skeletonSweep 1.6s ease-in-out infinite;
+}
+
+@keyframes skeletonSweep {
+  to { transform: translateX(100%); }
 }
 
 /* ==========================================================================
@@ -1701,9 +1764,7 @@ button.chip:hover {
 }
 
 .modal-dialog::backdrop {
-  background: rgba(3, 4, 10, 0.78);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(3, 4, 10, 0.86);
 }
 
 .modal-header {
@@ -1850,9 +1911,7 @@ button.chip:hover {
   padding: 0 12px;
   border-radius: var(--radius-full);
   border: 1px solid var(--line);
-  background: rgba(14, 18, 36, 0.92);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(14, 18, 36, 0.96);
   color: var(--ink);
   font-size: 17px;
   font-weight: 600;
@@ -1867,10 +1926,19 @@ button.chip:hover {
 }
 
 /* ==========================================================================
-   Responsive / Mobile Breakpoints (max-width: 760px)
+   Responsive / Mobile Breakpoints (max-width: 900px)
+   Keep 900px in sync with SHEET_QUERY in src/main.js (view centering).
    ========================================================================== */
 
-@media (max-width: 760px) {
+@media (min-width: 901px) and (max-width: 1180px) {
+  #top-bar { grid-template-columns: auto minmax(200px, 1fr) auto; }
+  .brand-tagline,
+  #reset-camera-btn span,
+  #view-toggle-btn span,
+  .search-shortcut { display: none; }
+}
+
+@media (max-width: 900px) {
   :root {
     --gutter: 10px;
   }
@@ -1896,24 +1964,25 @@ button.chip:hover {
   }
 
   .top-actions .btn {
-    height: 34px;
-    padding: 0 10px;
-    font-size: 12.5px;
+    height: 40px;
+    padding: 0 12px;
+    font-size: 13px;
   }
 
   #lens-bar {
-    top: 106px;
+    top: calc(112px + env(safe-area-inset-top, 0px));
     left: var(--gutter);
     right: var(--gutter);
   }
 
   .lens-pill {
-    padding: 6px 12px;
+    min-height: 36px;
+    padding: 8px 14px;
     font-size: 13px;
   }
 
   #view-panel {
-    top: 108px;
+    top: calc(114px + env(safe-area-inset-top, 0px));
     right: var(--gutter);
     max-height: calc(100dvh - 120px);
     overflow-y: auto;
@@ -1921,7 +1990,8 @@ button.chip:hover {
 
   #mobile-cam-controls {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
     gap: 6px;
     position: fixed;
     right: 12px;
@@ -1977,7 +2047,8 @@ button.chip:hover {
   }
 
   .panel-tab {
-    padding: 6px 14px;
+    min-height: 38px;
+    padding: 8px 14px;
     font-size: 13px;
   }
 
@@ -1991,7 +2062,7 @@ button.chip:hover {
 
   #universe-caption {
     left: 14px;
-    right: 184px;
+    right: 76px;
     bottom: calc(88px + 12px);
     transition: opacity 0.2s;
   }
@@ -2011,6 +2082,23 @@ button.chip:hover {
 
   #universe-stats {
     font-size: 12.5px;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  #universe-notice:not(:has(button)) {
+    font-size: 12px;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+
+  #enrichment-status-banner {
+    font-size: 12px;
+    padding: 5px 12px;
   }
 }
 
@@ -2028,7 +2116,8 @@ button.chip:hover {
 
 @media (prefers-reduced-motion: reduce) {
   .loading-orbit span,
-  .crest-orbit {
+  .crest-orbit,
+  .skeleton-list li::after {
     animation: none;
   }
 

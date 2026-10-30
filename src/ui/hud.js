@@ -1017,10 +1017,12 @@ export class Hud {
     notice.hidden = false;
   }
 
-  setLoading(loading, title = 'Charting your universe', body = 'Merging your Spotify listening history, top charts and Liked Songs, then grouping every artist by sound.') {
+  setLoading(loading, title = 'Charting your universe', body = 'Grouping every artist by sound.') {
     if (title) $('loading-title-text').textContent = title;
     if (body) $('loading-body-text').textContent = body;
     $('loading-overlay').hidden = !loading;
+    document.body.classList.toggle('is-loading', loading);
+    $('side-panel').setAttribute('aria-busy', String(Boolean(loading)));
   }
 
   /* ---------- Spotify ---------- */
